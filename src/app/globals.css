@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/* Colour tokens carried over from the old app (reference/old-todo-app.html). */
+:root {
+  --bg: #f1f4f0;
+  --surface: #ffffff;
+  --sunk: #e6ebe5;
+  --ink: #17211b;
+  --muted: #5d6a61;
+  --line: #d8dfd7;
+  --accent: #2e6a44;
+  --accent-ink: #ffffff;
+  --accent-soft: #dcebdf;
+  --high: #bf3b26;
+  --med: #b0741a;
+  --low: #8c978f;
+  --over-soft: #f9e4df;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1411;
+    --surface: #182019;
+    --sunk: #141b16;
+    --ink: #e5ece6;
+    --muted: #97a49b;
+    --line: #29332c;
+    --accent: #74c38f;
+    --accent-ink: #0b1a10;
+    --accent-soft: #1e3326;
+    --high: #f2846f;
+    --med: #e4b04f;
+    --low: #6f7b73;
+    --over-soft: #3a1f19;
+    color-scheme: dark;
+  }
+}
+
+/* Make the tokens usable as Tailwind classes, e.g. bg-surface, text-muted, font-display. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-sunk: var(--sunk);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-high: var(--high);
+  --color-med: var(--med);
+  --color-low: var(--low);
+  --color-over-soft: var(--over-soft);
+  --font-display: var(--font-display), "Avenir Next", system-ui, sans-serif;
+  --font-sans: var(--font-body), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-tap-highlight-color: transparent;
+  /* Keep content clear of the notch and home bar on iPhone. */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
