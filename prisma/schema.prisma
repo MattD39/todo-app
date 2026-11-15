@@ -1,0 +1,86 @@
+// Database design for the to-do app.
+// After changing this file, run: npm run db:migrate
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Priority {
+  high
+  medium
+  low
+}
+
+enum Repeat {
+  daily
+  weekly
+  monthly
+}
+
+// userId on every table is the signed-in user's id from Supabase Auth.
+// All queries in the app filter by it, so each person only sees their own data.
+
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz
+  tasks     Task[]
+
+  @@unique([userId, name])
+}
+
+model Task {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  title      String
+  notes      String    @default("")
+  priority   Priority  @default(medium)
+  // Due date with no time = due by the end of that day.
+  dueDate    DateTime? @db.Date
+  // Optional "HH:MM" (24-hour). Only set when dueDate is set.
+  dueTime    String?
+  // null = doesn't repeat. A repeating task moves to its next date when completed.
+  repeat     Repeat?
+  done       Boolean   @default(false)
+  doneAt     DateTime? @db.Timestamptz
+  categoryId String?   @db.Uuid
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @db.Timestamptz
+
+  subtasks    Subtask[]
+  completions TaskCompletion[]
+
+  @@index([userId, done])
+  @@index([userId, dueDate])
+}
+
+model Subtask {
+  id        String   @id @default(uuid()) @db.Uuid
+  taskId    String   @db.Uuid
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title     String
+  done      Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([taskId, position])
+}
+
+// One row each time a repeating task is completed (the old app's "history").
+model TaskCompletion {
+  id          String   @id @default(uuid()) @db.Uuid
+  taskId      String   @db.Uuid
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  completedOn DateTime @db.Date
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  @@index([taskId, completedOn])
+}
