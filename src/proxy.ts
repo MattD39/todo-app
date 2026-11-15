@@ -32,6 +32,15 @@ export async function proxy(request: NextRequest) {
 
   // Checks the login token (and refreshes it if it has expired).
   const { data } = await supabase.auth.getClaims();
+
+  // Server actions (form buttons like Sign in / Sign out) expect a reply from the
+  // action itself, so redirecting them breaks the button ("An unexpected response
+  // was received from the server"). Let them through with the refreshed cookie;
+  // actions that touch data check the user themselves via getCurrentUser().
+  if (request.headers.has("next-action")) {
+    return response;
+  }
+
   const signedIn = Boolean(data?.claims?.sub);
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + "/"));
