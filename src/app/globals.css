@@ -69,6 +69,25 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* Stop the page behind the task editor from scrolling while it's open. */
+body:has(dialog[open]) {
+  overflow: hidden;
+}
+
+/* The task editor slides up from the bottom (skipped if you've asked your
+   device to reduce motion). */
+@media (prefers-reduced-motion: no-preference) {
+  .sheet-in {
+    animation: sheet-up 0.22s ease-out;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { createSupabaseServerClient } from "./supabase/server";
@@ -11,7 +12,9 @@ export type CurrentUser = {
 // The one place the app finds out who is signed in. Every page and every
 // database read or write must start here and filter by the returned id.
 // Signed-out visitors are sent to /login.
-export async function getCurrentUser(): Promise<CurrentUser> {
+// cache() remembers the answer for the rest of the same request, so calling
+// this from many places (every function in tasks.ts) only checks once.
+export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
   // Checking a login compares the token's expiry with the current time, so it
   // must run fresh on every visit, never ahead of time. connection() tells
   // Next.js to wait for the real request before running anything below.
@@ -25,4 +28,4 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     redirect("/login");
   }
   return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null };
-}
+});
