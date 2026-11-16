@@ -76,11 +76,15 @@ model Subtask {
 
 // One row each time a repeating task is completed (the old app's "history").
 model TaskCompletion {
-  id          String   @id @default(uuid()) @db.Uuid
-  taskId      String   @db.Uuid
-  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  completedOn DateTime @db.Date
-  createdAt   DateTime @default(now()) @db.Timestamptz
+  id              String    @id @default(uuid()) @db.Uuid
+  taskId          String    @db.Uuid
+  task            Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  completedOn     DateTime  @db.Date
+  // What the task looked like just before it moved on, so the tick can be undone:
+  // its old due date (null = it had none) and which steps were ticked.
+  previousDueDate DateTime? @db.Date
+  stepsDone       String[]  @default([]) @db.Uuid
+  createdAt       DateTime  @default(now()) @db.Timestamptz
 
   @@index([taskId, completedOn])
 }

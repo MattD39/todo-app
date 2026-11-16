@@ -13,6 +13,8 @@ import {
 } from "react";
 import type { TaskDTO } from "@/lib/tasks";
 import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
+import { fieldLabel, input, segment } from "./form-styles";
+import { StepsEditor } from "./steps-editor";
 
 // Everything for adding and editing tasks:
 //   • TaskEditorProvider — wraps a screen; owns "is the editor open, and for which task?"
@@ -26,7 +28,11 @@ import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
 type Editing = { mode: "new" } | { mode: "edit"; task: TaskDTO };
 
 const OpenEditor = createContext<(editing: Editing) => void>(() => {});
-const ShowToast = createContext<(message: string) => void>(() => {});
+// A toast can carry one button, e.g. Undo.
+type ToastAction = { label: string; onClick: () => void };
+type Toast = { message: string; action?: ToastAction };
+
+const ShowToast = createContext<(message: string, action?: ToastAction) => void>(() => {});
 
 export function useToast() {
   return use(ShowToast);
@@ -54,12 +60,17 @@ export function TaskEditorProvider({
   }, []);
   const close = useCallback(() => setEditing(null), []);
 
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [currentToast, setCurrentToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const toast = useCallback((message: string) => {
-    setToastMessage(message);
+  const hideToast = useCallback(() => {
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastMessage(null), 2600);
+    setCurrentToast(null);
+  }, []);
+  const toast = useCallback((message: string, action?: ToastAction) => {
+    setCurrentToast({ message, action });
+    clearTimeout(toastTimer.current);
+    // Longer when there's a button, so there's time to tap it.
+    toastTimer.current = setTimeout(() => setCurrentToast(null), action ? 6000 : 2600);
   }, []);
 
   const suggestions = [...new Set([...categories, ...STARTER_CATEGORIES])];
@@ -80,9 +91,23 @@ export function TaskEditorProvider({
         )}
         {/* aria-live: screen readers announce the message when it appears. */}
         <div role="status" aria-live="polite">
-          {toastMessage && (
-            <div className="fixed bottom-[calc(64px+86px+env(safe-area-inset-bottom,0px))] left-1/2 z-30 max-w-[calc(100%-32px)] -translate-x-1/2 rounded-full bg-ink px-4 py-2.5 text-center text-[0.9rem] text-bg">
-              {toastMessage}
+          {currentToast && (
+            <div className="fixed bottom-[calc(64px+86px+env(safe-area-inset-bottom,0px))] left-1/2 z-30 flex w-max max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-3 rounded-full bg-ink px-4 py-2.5 text-center text-[0.9rem] text-bg">
+              <span>{currentToast.message}</span>
+              {currentToast.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const { onClick } = currentToast.action!;
+                    hideToast();
+                    onClick();
+                  }}
+                  // Negative margin: a bigger tap target without a taller bar.
+                  className="-my-2 -mr-2 rounded-full px-2 py-2 font-bold text-accent-soft underline underline-offset-2"
+                >
+                  {currentToast.action.label}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -129,9 +154,13 @@ const PRIORITY_OPTIONS = [
   { value: "low", label: "Low", checkedColor: "has-checked:text-ink" },
 ] as const;
 
-const fieldLabel = "flex flex-col gap-[5px] text-[0.8rem] font-bold text-muted";
-const input =
-  "w-full rounded-[10px] border border-line bg-surface px-3 py-2.5 text-base font-normal text-ink disabled:opacity-50";
+// "" = doesn't repeat (the form sends a blank value).
+const REPEAT_OPTIONS = [
+  { value: "", label: "Never" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+] as const;
 
 function TaskSheet({
   editing,
@@ -229,10 +258,7 @@ function TaskSheet({
             <legend className="mb-[5px]">Priority</legend>
             <div className="grid grid-cols-3 gap-[3px] rounded-[10px] bg-sunk p-[3px]">
               {PRIORITY_OPTIONS.map((p) => (
-                <label
-                  key={p.value}
-                  className={`cursor-pointer rounded-lg py-2 text-center text-[0.92rem] font-normal text-muted has-checked:bg-surface has-checked:font-bold has-checked:shadow-[0_1px_2px_rgba(0,0,0,.08)] has-focus-visible:outline-2 has-focus-visible:outline-accent ${p.checkedColor}`}
-                >
+                <label key={p.value} className={`${segment} ${p.checkedColor}`}>
                   <input
                     type="radio"
                     name="priority"
@@ -269,6 +295,24 @@ function TaskSheet({
             </label>
           </div>
 
+          <fieldset className={fieldLabel}>
+            <legend className="mb-[5px]">Repeats</legend>
+            <div className="grid grid-cols-4 gap-[3px] rounded-[10px] bg-sunk p-[3px]">
+              {REPEAT_OPTIONS.map((r) => (
+                <label key={r.value} className={`${segment} has-checked:text-ink`}>
+                  <input
+                    type="radio"
+                    name="repeat"
+                    value={r.value}
+                    defaultChecked={(task?.repeat ?? "") === r.value}
+                    className="sr-only"
+                  />
+                  {r.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
           <label className={fieldLabel}>
             Notes
             <textarea
@@ -279,6 +323,8 @@ function TaskSheet({
               className={`${input} min-h-[72px] resize-y`}
             />
           </label>
+
+          <StepsEditor taskId={task?.id ?? null} initialSteps={task?.steps ?? []} />
 
           {state.error && (
             <p role="alert" className="text-[0.9rem] font-bold text-high">

@@ -44,6 +44,31 @@ export function addDays(day: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Same day of the month, n months later. If that month is shorter, it uses
+// the month's last day instead (Jan 31 + 1 month = Feb 28, or 29 in a leap year).
+export function addMonths(day: string, n: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  const first = new Date(Date.UTC(y, m - 1 + n, 1));
+  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  first.setUTCDate(Math.min(d, lastDay));
+  return first.toISOString().slice(0, 10);
+}
+
+// Where a repeating task moves to when it's ticked off: one step on from its
+// due date (or from today, if it has none), and keeps stepping until the date
+// is after today, so a task that was days overdue doesn't land in the past.
+export function nextRepeatDate(repeat: "daily" | "weekly" | "monthly", dueDate: string | null, today: string): string {
+  const base = dueDate ?? today;
+  // Each step counts from the starting date, so catching up over several
+  // months doesn't drift: Jan 31, two months overdue, lands on Mar 31.
+  const step = (i: number) =>
+    repeat === "daily" ? addDays(base, i) : repeat === "weekly" ? addDays(base, 7 * i) : addMonths(base, i);
+  let i = 1;
+  let next = step(i);
+  while (next <= today) next = step(++i);
+  return next;
+}
+
 // Overdue = due on an earlier day, or due earlier today at a set time.
 export function isOverdue(task: { done: boolean; dueDate: string | null; dueTime: string | null }, now: Now): boolean {
   if (task.done || !task.dueDate) return false;

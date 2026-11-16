@@ -2,7 +2,20 @@
 
 import { refresh } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
-import { createTask, deleteTask, setTaskDone, TaskError, updateTask } from "@/lib/tasks";
+import { relDay } from "@/lib/dates";
+import {
+  addStep,
+  createTask,
+  deleteStep,
+  deleteTask,
+  setStepDone,
+  setTaskDone,
+  TaskError,
+  undoCompletion,
+  updateTask,
+  type NewTaskInput,
+  type StepDTO,
+} from "@/lib/tasks";
 
 // Server actions: functions the browser can call. Anyone could call these
 // directly, so they never trust the input — they hand it to src/lib/tasks.ts,
@@ -26,17 +39,64 @@ export async function saveTask(_prev: SaveTaskState, formData: FormData): Promis
     dueDate: text("dueDate"),
     dueTime: text("dueTime"),
     notes: text("notes"),
+    repeat: text("repeat"),
   };
 
   const id = text("id");
-  const { error } = await run("save", () => (id ? updateTask(id, fields) : createTask(fields)));
+  if (id) {
+    const { error } = await run("save", () => updateTask(id, fields));
+    return { error, savedAt: error ? null : Date.now() };
+  }
+
+  // A new task's steps come as one JSON list: [{ "title": "...", "done": false }].
+  // The shape isn't trusted: src/lib/tasks.ts checks every step.
+  let steps: NewTaskInput["steps"];
+  try {
+    steps = JSON.parse(text("steps") || "[]");
+  } catch {
+    return { error: "Something went wrong with the steps.", savedAt: null };
+  }
+  const { error } = await run("save", () => createTask({ ...fields, steps }));
   return { error, savedAt: error ? null : Date.now() };
 }
 
+// Steps on a task that's already saved change straight away, one at a time.
+export async function addTaskStep(taskId: unknown, title: unknown): Promise<ActionResult & { step?: StepDTO }> {
+  if (typeof taskId !== "string" || typeof title !== "string") return { error: "Something went wrong." };
+  const { error, value } = await run("add the step", () => addStep(taskId, title));
+  return { error, step: value };
+}
+
+export async function tickTaskStep(stepId: unknown, done: unknown): Promise<ActionResult> {
+  if (typeof stepId !== "string" || typeof done !== "boolean") return { error: "Something went wrong." };
+  return run("update the step", () => setStepDone(stepId, done));
+}
+
+export async function removeTaskStep(stepId: unknown): Promise<ActionResult> {
+  if (typeof stepId !== "string") return { error: "Something went wrong." };
+  return run("remove the step", () => deleteStep(stepId));
+}
+
+// When a repeating task is ticked, the browser gets a message to show
+// ("Done. Next one: Tomorrow") and the id it needs to undo the tick.
+export type MarkDoneResult = ActionResult & { undo?: { completionId: string; message: string } };
+
 // Tick a task off (done = true) or untick it (done = false).
-export async function markTaskDone(id: unknown, done: unknown): Promise<ActionResult> {
+export async function markTaskDone(id: unknown, done: unknown): Promise<MarkDoneResult> {
   if (typeof id !== "string" || typeof done !== "boolean") return { error: "Something went wrong." };
-  return run("update", () => setTaskDone(id, done));
+  const { error, value } = await run("update", () => setTaskDone(id, done));
+  if (error || !value?.rolled) return { error };
+  return {
+    error: null,
+    undo: { completionId: value.completionId, message: `Done. Next one: ${relDay(value.nextDate, value.today)}` },
+  };
+}
+
+// Undo one tick of a repeating task (from the message's Undo button, or by
+// unticking its row under "Finished today").
+export async function undoTick(completionId: unknown): Promise<ActionResult> {
+  if (typeof completionId !== "string") return { error: "Something went wrong." };
+  return run("undo", () => undoCompletion(completionId));
 }
 
 export async function removeTask(id: unknown): Promise<ActionResult> {
@@ -46,9 +106,10 @@ export async function removeTask(id: unknown): Promise<ActionResult> {
 
 // Shared by every action: do the change, turn problems into a friendly
 // message, and refresh the page so it shows the latest data.
-async function run(verb: string, change: () => Promise<unknown>): Promise<ActionResult> {
+async function run<T>(verb: string, change: () => Promise<T>): Promise<ActionResult & { value?: T }> {
+  let value: T;
   try {
-    await change();
+    value = await change();
   } catch (error) {
     // If the login has expired, getCurrentUser() "throws" a redirect to /login.
     // That isn't a real error, so let Next.js carry it out.
@@ -58,5 +119,5 @@ async function run(verb: string, change: () => Promise<unknown>): Promise<Action
     return { error: `Couldn't ${verb}. Check your connection and try again.` };
   }
   refresh();
-  return { error: null };
+  return { error: null, value };
 }

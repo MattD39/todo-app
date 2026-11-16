@@ -36,7 +36,8 @@ export function TaskGroup({
       </h2>
       <ul className="overflow-hidden rounded-[14px] border border-line bg-surface">
         {tasks.map((task) => (
-          <TaskRow key={task.id} task={task} now={now} timeZone={timeZone} hideTodayDate={hideTodayDate} />
+          // A repeating task ticked twice today has two entries, so ticks use their own id.
+          <TaskRow key={task.completionId ?? task.id} task={task} now={now} timeZone={timeZone} hideTodayDate={hideTodayDate} />
         ))}
       </ul>
     </section>
@@ -76,6 +77,16 @@ function TaskRow({
             <span className={`font-mono text-[0.76rem] ${overdue ? "font-medium text-high" : ""}`}>{due}</span>
           )}
           {task.repeat && <span>↻ {REPEAT_LABEL[task.repeat]}</span>}
+          {/* Not on a repeating task's "Finished today" entry: its steps have
+              already been reset for next time, so "0/3" would look wrong. */}
+          {task.steps.length > 0 && !task.completionId && (
+            <span>
+              {task.steps.filter((s) => s.done).length}/{task.steps.length} steps
+            </span>
+          )}
+          {task.completionId && task.dueDate && (
+            <span className="font-mono text-[0.76rem]">Next: {relDay(task.dueDate, now.today)}</span>
+          )}
           {task.done && task.doneAt && (
             <span className="font-mono text-[0.76rem]">Done {relDay(dayOf(task.doneAt, timeZone), now.today)}</span>
           )}

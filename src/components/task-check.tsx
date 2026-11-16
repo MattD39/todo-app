@@ -2,22 +2,43 @@
 
 import { startTransition, useOptimistic } from "react";
 import type { TaskDTO } from "@/lib/tasks";
-import { markTaskDone } from "@/app/task-actions";
+import { markTaskDone, undoTick } from "@/app/task-actions";
 import { useToast } from "./task-editor";
 
 // The round tick box at the start of each task row. Tapping it marks the task
 // done (or not done). The tick appears straight away ("optimistic"), before
 // the server has answered; if saving fails it undoes itself and says why.
-export function CheckButton({ task }: { task: Pick<TaskDTO, "id" | "title" | "done" | "priority"> }) {
+//
+// Repeating tasks: ticking one moves it to its next date and shows
+// "Done. Next one: …" with an Undo button. Its entry under "Finished today"
+// can also be unticked, which undoes that tick the same way.
+export function CheckButton({
+  task,
+}: {
+  task: Pick<TaskDTO, "id" | "title" | "done" | "priority" | "completionId">;
+}) {
   const [done, setDone] = useOptimistic(task.done);
   const toast = useToast();
+
+  async function undo(completionId: string) {
+    const { error } = await undoTick(completionId);
+    toast(error ?? "Tick undone");
+  }
 
   function toggle() {
     startTransition(async () => {
       const next = !done;
       setDone(next);
-      const { error } = await markTaskDone(task.id, next);
-      if (error) toast(error);
+      if (task.completionId) {
+        await undo(task.completionId);
+        return;
+      }
+      const result = await markTaskDone(task.id, next);
+      if (result.error) toast(result.error);
+      else if (result.undo) {
+        const { completionId, message } = result.undo;
+        toast(message, { label: "Undo", onClick: () => startTransition(() => undo(completionId)) });
+      }
     });
   }
 
@@ -35,7 +56,13 @@ export function CheckButton({ task }: { task: Pick<TaskDTO, "id" | "title" | "do
     <button
       type="button"
       onClick={toggle}
-      aria-label={done ? `Mark "${task.title}" as not done` : `Mark "${task.title}" as done`}
+      aria-label={
+        task.completionId
+          ? `Undo ticking "${task.title}"`
+          : done
+            ? `Mark "${task.title}" as not done`
+            : `Mark "${task.title}" as done`
+      }
       className="group -m-[9px] flex-none p-[9px]"
     >
       <span className={`mt-px grid size-[26px] place-items-center rounded-full border-2 ${ring}`}>
