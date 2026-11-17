@@ -27,6 +27,14 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "To-Do",
   description: "A personal to-do list with categories, recurring tasks and a calendar.",
+  // How the app behaves once added to an iPhone home screen: its name under the
+  // icon, opening full-screen, and a normal status bar (dark text on light mode,
+  // light text in dark mode) above the app.
+  appleWebApp: {
+    capable: true,
+    title: "To-Do",
+    statusBarStyle: "default",
+  },
 };
 
 // viewportFit "cover" lets the app draw behind the iPhone notch and home bar;

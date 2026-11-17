@@ -65,6 +65,10 @@ function redirectKeepingCookies(request: NextRequest, from: NextResponse, to: st
 }
 
 export const config = {
-  // Skip Next.js's own files, the favicon and images, so they load without a login check.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
+  // Skip Next.js's own files, the favicon, images, and the app icons + manifest, so
+  // they load without a login check. (A phone fetches the icon and manifest while
+  // signed out when you add the app to the home screen.)
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|icon$|apple-icon$|manifest\\.webmanifest$|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+  ],
 };
