@@ -8,6 +8,7 @@ import { TimeZoneSync } from "@/app/timezone-sync";
 import { TaskEditorProvider } from "./task-editor";
 import { CategoryChips } from "./category-chips";
 import { SettingsButton, SettingsButtonPlaceholder } from "./settings-menu";
+import { RefreshOnReturn } from "./refresh-on-return";
 
 export { Status } from "./status";
 
@@ -65,6 +66,7 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
   return (
     <TaskEditorProvider categories={data.categories} defaultCategory={data.category} today={data.now.today}>
       <TimeZoneSync serverTimeZone={data.timeZone} />
+      <RefreshOnReturn />
       <ScreenHeader
         tab={tab}
         email={data.user.email ?? ""}

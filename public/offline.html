@@ -1,0 +1,90 @@
+<!doctype html>
+<!--
+  Shown by the service worker (public/sw.js) when you open a page with no
+  internet connection. It has to work with no server at all, so everything it
+  needs (styles, icon) is inside this one file.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f1f4f0" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f1411" media="(prefers-color-scheme: dark)" />
+    <title>Offline · To-Do</title>
+    <style>
+      :root {
+        --bg: #f1f4f0;
+        --ink: #17211b;
+        --muted: #5d6a61;
+        --accent: #2e6a44;
+        --accent-ink: #ffffff;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1411;
+          --ink: #e5ece6;
+          --muted: #97a49b;
+          --accent: #74c38f;
+          --accent-ink: #0b1a10;
+          color-scheme: dark;
+        }
+      }
+      html {
+        background: var(--bg);
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
+        box-sizing: border-box;
+        background: var(--bg);
+        color: var(--ink);
+        font: 16px/1.45 system-ui, -apple-system, sans-serif;
+        text-align: center;
+        -webkit-tap-highlight-color: transparent;
+      }
+      main {
+        max-width: 320px;
+      }
+      svg {
+        display: block;
+        margin: 0 auto 18px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 1.5rem;
+      }
+      p {
+        margin: 0 0 22px;
+        color: var(--muted);
+      }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 24px;
+        background: var(--accent);
+        color: var(--accent-ink);
+        font: inherit;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg width="72" height="72" viewBox="0 0 72 72" aria-hidden="true">
+        <rect width="72" height="72" rx="16" fill="#2e6a44" />
+        <path d="M22 37.5l9.5 9.5L51 27" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <h1>You're offline</h1>
+      <p>Your tasks will be here when you're back online. Nothing you've saved is lost.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+    <script>
+      // Load the real page by itself as soon as the connection comes back.
+      window.addEventListener("online", () => location.reload());
+    </script>
+  </body>
+</html>

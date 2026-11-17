@@ -5,6 +5,7 @@ import {
   JetBrains_Mono,
 } from "next/font/google";
 import "./globals.css";
+import { ServiceWorkerSetup } from "./service-worker-setup";
 
 // Same three fonts as the old app, loaded by Next.js so they're self-hosted.
 const display = Bricolage_Grotesque({
@@ -55,7 +56,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${display.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        {children}
+        <ServiceWorkerSetup />
+      </body>
     </html>
   );
 }

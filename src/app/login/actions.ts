@@ -33,6 +33,9 @@ export async function signIn(_prev: SignInState, formData: FormData): Promise<Si
 
 export async function signOut() {
   const supabase = await createSupabaseServerClient();
-  await supabase.auth.signOut();
+  // "local" signs out only this device. Supabase's default ("global") ends your
+  // login on every device, so signing out on the computer would quietly log
+  // the phone app out too.
+  await supabase.auth.signOut({ scope: "local" });
   redirect("/login");
 }
