@@ -22,10 +22,10 @@ import { getTimeZone } from "./timezone";
 export const PRIORITIES = ["high", "medium", "low"] as const satisfies readonly Priority[];
 export const REPEATS = ["daily", "weekly", "monthly"] as const satisfies readonly Repeat[];
 
-const MAX_TITLE = 200;
-const MAX_NOTES = 5000;
-const MAX_CATEGORY = 40;
-const MAX_STEPS = 50;
+export const MAX_TITLE = 200;
+export const MAX_NOTES = 5000;
+export const MAX_CATEGORY = 40;
+export const MAX_STEPS = 50;
 
 // What the rest of the app gets back for a task. Dates are plain strings so
 // they can be passed straight to the browser.
@@ -385,21 +385,36 @@ export async function deleteTask(id: string): Promise<void> {
 
 // Adds a step to the end of a task's checklist.
 export async function addStep(taskId: string, title: string): Promise<StepDTO> {
+  const [step] = await addSteps(taskId, [title]);
+  return step;
+}
+
+// Adds several steps to the end of a task's checklist, in order, all or none
+// (used by Claude's "Suggest steps").
+export async function addSteps(taskId: string, titles: string[]): Promise<StepDTO[]> {
   return asCurrentUser(async (tx, userId) => {
     const task = await findOwnedTask(tx, userId, taskId);
-    const clean = cleanStepTitle(title);
+    if (!Array.isArray(titles) || titles.length === 0) throw new TaskError("Give the step a name.");
+    const clean = titles.map(cleanStepTitle);
 
     const { _count, _max } = await tx.subtask.aggregate({
       where: { taskId: task.id },
       _count: true,
       _max: { position: true },
     });
-    if (_count >= MAX_STEPS) throw new TaskError(`A task can have up to ${MAX_STEPS} steps.`);
+    if (_count + clean.length > MAX_STEPS) throw new TaskError(`A task can have up to ${MAX_STEPS} steps.`);
 
-    return tx.subtask.create({
-      data: { taskId: task.id, title: clean, position: (_max.position ?? -1) + 1 },
-      select: { id: true, title: true, done: true },
-    });
+    const start = (_max.position ?? -1) + 1;
+    const steps: StepDTO[] = [];
+    for (const [i, title] of clean.entries()) {
+      steps.push(
+        await tx.subtask.create({
+          data: { taskId: task.id, title, position: start + i },
+          select: { id: true, title: true, done: true },
+        }),
+      );
+    }
+    return steps;
   });
 }
 

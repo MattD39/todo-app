@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 import type { StepDTO } from "@/lib/tasks";
-import { addTaskStep, removeTaskStep, tickTaskStep } from "@/app/task-actions";
+import { addTaskStep, addTaskSteps, removeTaskStep, tickTaskStep } from "@/app/task-actions";
+import { suggestTaskSteps } from "@/app/ai-actions";
 import { fieldLabel, input } from "./form-styles";
 
 // The "Steps" checklist inside the task editor sheet.
@@ -10,6 +11,9 @@ import { fieldLabel, input } from "./form-styles";
 // • On a task that's already saved, every change (add, tick, remove) saves
 //   straight away. The list updates first and the server catches up; if
 //   saving fails, the change is undone and a message says why.
+// • "Suggest steps" asks Claude for a few steps based on the title, category
+//   and notes as they are in the form right now (saved or not), then adds
+//   them like typed ones.
 // • On a new task, nothing exists on the server yet, so the steps are kept
 //   here and sent along when you tap "Add task" (as a hidden form field).
 
@@ -21,8 +25,71 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
   const [steps, setSteps] = useState<Step[]>(initialSteps);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [note, setNote] = useState<string | null>(null); // e.g. "Added 4 steps."
+  const fieldsetRef = useRef<HTMLFieldSetElement>(null);
   // Temporary ids for steps that don't have a real one yet.
   const nextTempId = useRef(0);
+
+  async function suggest() {
+    const form = fieldsetRef.current?.form;
+    if (!form) return;
+    const field = (name: string) => {
+      const value = new FormData(form).get(name);
+      return typeof value === "string" ? value : "";
+    };
+    if (!field("title").trim()) {
+      setNote(null);
+      setError("Give the task a title first, so Claude knows what it's about.");
+      return;
+    }
+    const room = MAX_STEPS - steps.length;
+    if (room <= 0) {
+      setError(`A task can have up to ${MAX_STEPS} steps.`);
+      return;
+    }
+
+    setError(null);
+    setNote(null);
+    setSuggesting(true);
+    try {
+      const result = await suggestTaskSteps({
+        title: field("title"),
+        category: field("category"),
+        notes: field("notes"),
+        steps: steps.map((s) => s.title),
+      });
+      if (!result.steps) {
+        setError(result.error);
+        return;
+      }
+      const titles = result.steps.slice(0, room);
+      const added: Step[] = titles.map((title) => ({
+        id: `new-${nextTempId.current++}`,
+        title,
+        done: false,
+        saving: taskId !== null,
+      }));
+      setSteps((s) => [...s, ...added]);
+
+      if (taskId) {
+        const saved = await addTaskSteps(taskId, titles);
+        const tempIds = new Set(added.map((a) => a.id));
+        if (!saved.steps) {
+          setSteps((s) => s.filter((step) => !tempIds.has(step.id)));
+          setError(saved.error);
+          return;
+        }
+        const real = saved.steps;
+        setSteps((s) => [...s.filter((step) => !tempIds.has(step.id)), ...real]);
+      }
+      setNote(`Added ${titles.length} ${titles.length === 1 ? "step" : "steps"}. Remove any you don't need.`);
+    } catch {
+      setError("Couldn't reach Claude. Check your connection and try again.");
+    } finally {
+      setSuggesting(false);
+    }
+  }
 
   async function add() {
     const title = draft.trim();
@@ -79,7 +146,7 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
   const doneCount = steps.filter((s) => s.done).length;
 
   return (
-    <fieldset className={fieldLabel}>
+    <fieldset ref={fieldsetRef} className={fieldLabel}>
       <legend className="mb-[5px] flex w-full justify-between">
         <span>Steps</span>
         {steps.length > 0 && (
@@ -177,6 +244,21 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
           Add
         </button>
       </div>
+
+      <button
+        type="button"
+        onClick={suggest}
+        disabled={suggesting}
+        className="self-start rounded-[10px] border border-line bg-surface px-4 py-2 font-bold text-accent disabled:opacity-60"
+      >
+        {suggesting ? "Claude is thinking…" : "✨ Suggest steps"}
+      </button>
+
+      {note && (
+        <p aria-live="polite" className="text-[0.9rem] font-normal text-muted">
+          {note}
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="text-[0.9rem] font-bold text-high">

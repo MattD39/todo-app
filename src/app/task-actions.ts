@@ -5,6 +5,7 @@ import { unstable_rethrow } from "next/navigation";
 import { relDay } from "@/lib/dates";
 import {
   addStep,
+  addSteps,
   createTask,
   deleteStep,
   deleteTask,
@@ -65,6 +66,15 @@ export async function addTaskStep(taskId: unknown, title: unknown): Promise<Acti
   if (typeof taskId !== "string" || typeof title !== "string") return { error: "Something went wrong." };
   const { error, value } = await run("add the step", () => addStep(taskId, title));
   return { error, step: value };
+}
+
+// Several steps at once (from Claude's "Suggest steps"), saved all or none.
+export async function addTaskSteps(taskId: unknown, titles: unknown): Promise<ActionResult & { steps?: StepDTO[] }> {
+  if (typeof taskId !== "string" || !Array.isArray(titles) || !titles.every((t) => typeof t === "string")) {
+    return { error: "Something went wrong." };
+  }
+  const { error, value } = await run("add the steps", () => addSteps(taskId, titles));
+  return { error, steps: value };
 }
 
 export async function tickTaskStep(stepId: unknown, done: unknown): Promise<ActionResult> {
