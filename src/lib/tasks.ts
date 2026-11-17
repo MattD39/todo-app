@@ -1,6 +1,6 @@
 import "server-only";
 import { getCurrentUser } from "./auth";
-import { db } from "./db";
+import { runAsUser, type Db } from "./db";
 import { Prisma } from "@/generated/prisma/client";
 import type { Priority, Repeat } from "@/generated/prisma/enums";
 import { addDays, nextRepeatDate, nowIn } from "./dates";
@@ -10,14 +10,13 @@ import { getTimeZone } from "./timezone";
 // The ONLY file in the app that reads or writes tasks and categories.
 //
 // Rules every function here follows:
-//   1. Start with getCurrentUser() — signed-out visitors never get past it.
-//   2. Every query is filtered by that user's id, so nobody can see or change
-//      someone else's tasks, even by guessing a task id.
+//   1. Go through asCurrentUser() — it checks who's signed in (signed-out
+//      visitors never get past it) and runs the queries as that user, so the
+//      database's own row level security rules only show that user's rows.
+//   2. Still filter every query by that user's id too: two locks, so a mistake
+//      in either one alone can't leak someone else's tasks.
 //   3. Check all input (it can come from a form, and later from Claude), and
 //      return plain, minimal objects — never raw database rows.
-//
-// Phase 6.5 will add database-level protection (row-level security) by
-// changing just this file.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const PRIORITIES = ["high", "medium", "low"] as const satisfies readonly Priority[];
@@ -89,29 +88,31 @@ export class TaskError extends Error {}
 // (Which ones count as "overdue" or "today" depends on the user's own clock,
 // so the screens work that out.)
 export async function listOpenTasks(): Promise<TaskDTO[]> {
-  const user = await getCurrentUser();
-  const rows = await db.task.findMany({
-    where: { userId: user.id, done: false },
-    include: taskInclude,
-    orderBy: [
-      { dueDate: { sort: "asc", nulls: "last" } },
-      { dueTime: { sort: "asc", nulls: "last" } },
-      { priority: "asc" }, // high → medium → low (the order they're defined in)
-      { title: "asc" },
-    ],
-  });
+  const rows = await asCurrentUser((tx, userId) =>
+    tx.task.findMany({
+      where: { userId, done: false },
+      include: taskInclude,
+      orderBy: [
+        { dueDate: { sort: "asc", nulls: "last" } },
+        { dueTime: { sort: "asc", nulls: "last" } },
+        { priority: "asc" }, // high → medium → low (the order they're defined in)
+        { title: "asc" },
+      ],
+    }),
+  );
   return rows.map(toDTO);
 }
 
 // Finished tasks, most recently finished first.
 export async function listDoneTasks(limit = 200): Promise<TaskDTO[]> {
-  const user = await getCurrentUser();
-  const rows = await db.task.findMany({
-    where: { userId: user.id, done: true },
-    include: taskInclude,
-    orderBy: { doneAt: { sort: "desc", nulls: "last" } },
-    take: limit,
-  });
+  const rows = await asCurrentUser((tx, userId) =>
+    tx.task.findMany({
+      where: { userId, done: true },
+      include: taskInclude,
+      orderBy: { doneAt: { sort: "desc", nulls: "last" } },
+      take: limit,
+    }),
+  );
   return rows.map(toDTO);
 }
 
@@ -120,18 +121,20 @@ export async function listDoneTasks(limit = 200): Promise<TaskDTO[]> {
 // Today screen picks out the ones finished "today" in the user's own time
 // zone (36h covers every time zone).
 export async function listRecentlyDoneTasks(): Promise<TaskDTO[]> {
-  const user = await getCurrentUser();
-  const since = new Date(Date.now() - 36 * 60 * 60 * 1000);
-  const [rows, completions] = await Promise.all([
-    db.task.findMany({
-      where: { userId: user.id, done: true, doneAt: { gte: since } },
-      include: taskInclude,
-    }),
-    db.taskCompletion.findMany({
-      where: { createdAt: { gte: since }, task: { userId: user.id } },
-      include: { task: { include: taskInclude } },
-    }),
-  ]);
+  const [rows, completions] = await asCurrentUser(async (tx, userId) => {
+    // Read the clock only after the login check (see asCurrentUser).
+    const since = new Date(Date.now() - 36 * 60 * 60 * 1000);
+    return [
+      await tx.task.findMany({
+        where: { userId, done: true, doneAt: { gte: since } },
+        include: taskInclude,
+      }),
+      await tx.taskCompletion.findMany({
+        where: { createdAt: { gte: since }, task: { userId } },
+        include: { task: { include: taskInclude } },
+      }),
+    ] as const;
+  });
   const entries: TaskDTO[] = [
     ...rows.map(toDTO),
     ...completions.map((c) => ({
@@ -159,39 +162,39 @@ export type HistoryDTO = { done: TaskDTO[]; ticks: TickDTO[] };
 // one-off tasks ticked off then, and repeating-task ticks that were either
 // done or due in that range (so the due day can say "Done early on …").
 export async function listHistory(from: string, to: string): Promise<HistoryDTO> {
-  const user = await getCurrentUser();
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
     throw new TaskError("That isn't a valid date range.");
   }
-  // doneAt is a moment in time; which day that was depends on the user's time
-  // zone, so fetch a day either side and let the screen pick the exact days.
-  const [rows, completions] = await Promise.all([
-    db.task.findMany({
+  const [rows, completions, latest] = await asCurrentUser(async (tx, userId) => {
+    // doneAt is a moment in time; which day that was depends on the user's time
+    // zone, so fetch a day either side and let the screen pick the exact days.
+    const rows = await tx.task.findMany({
       where: {
-        userId: user.id,
+        userId,
         done: true,
         doneAt: { gte: dateToDb(addDays(from, -1)), lt: dateToDb(addDays(to, 2)) },
       },
       include: taskInclude,
-    }),
-    db.taskCompletion.findMany({
+    });
+    const completions = await tx.taskCompletion.findMany({
       where: {
-        task: { userId: user.id },
+        task: { userId },
         OR: [
           { completedOn: { gte: dateToDb(from), lte: dateToDb(to) } },
           { previousDueDate: { gte: dateToDb(from), lte: dateToDb(to) } },
         ],
       },
       include: { task: { include: taskInclude } },
-    }),
-  ]);
-
-  // The most recent tick of each of those tasks (it may be outside the range).
-  const latest = await db.taskCompletion.findMany({
-    where: { taskId: { in: [...new Set(completions.map((c) => c.taskId))] }, task: { userId: user.id } },
-    orderBy: { createdAt: "desc" },
-    distinct: ["taskId"],
-    select: { id: true },
+    });
+    // The most recent tick of each of those tasks (it may be outside the range).
+    const latest = await tx.taskCompletion.findMany({
+      where: { taskId: { in: [...new Set(completions.map((c) => c.taskId))] }, task: { userId } },
+      orderBy: { createdAt: "desc" },
+      distinct: ["taskId"],
+      select: { id: true },
+    });
+    return [rows, completions, latest] as const;
   });
   const latestIds = new Set(latest.map((c) => c.id));
 
@@ -210,12 +213,16 @@ export async function listHistory(from: string, to: string): Promise<HistoryDTO>
 }
 
 export async function getTask(id: string): Promise<TaskDTO | null> {
-  const user = await getCurrentUser();
-  if (!isUuid(id)) return null;
-  const row = await db.task.findFirst({
-    where: { id, userId: user.id },
-    include: taskInclude,
-  });
+  if (!isUuid(id)) {
+    await getCurrentUser(); // still turn signed-out visitors away first
+    return null;
+  }
+  const row = await asCurrentUser((tx, userId) =>
+    tx.task.findFirst({
+      where: { id, userId },
+      include: taskInclude,
+    }),
+  );
   return row ? toDTO(row) : null;
 }
 
@@ -223,69 +230,77 @@ export async function getTask(id: string): Promise<TaskDTO | null> {
 // suggestions list and filter chips. (Categories whose tasks were all deleted
 // stay in the database, and get reused if you type the name again.)
 export async function listCategories(): Promise<CategoryDTO[]> {
-  const user = await getCurrentUser();
-  return db.category.findMany({
-    where: { userId: user.id, tasks: { some: {} } },
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
+  return asCurrentUser((tx, userId) =>
+    tx.category.findMany({
+      where: { userId, tasks: { some: {} } },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+  );
 }
 
 // ─── Writing ─────────────────────────────────────────────────────────────────
 
 export async function createTask(input: NewTaskInput): Promise<TaskDTO> {
-  const user = await getCurrentUser();
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
   const title = cleanTitle(input.title);
   const dueDate = cleanDate(input.dueDate);
   const dueTime = dueDate ? cleanTime(input.dueTime) : null; // a time needs a date
-  const categoryId = await categoryIdFor(user.id, input.category);
+  const notes = cleanNotes(input.notes);
+  const priority = cleanPriority(input.priority) ?? "medium";
+  const repeat = cleanRepeat(input.repeat);
+  const steps = cleanSteps(input.steps);
 
-  const row = await db.task.create({
-    data: {
-      userId: user.id,
-      title,
-      notes: cleanNotes(input.notes),
-      priority: cleanPriority(input.priority) ?? "medium",
-      dueDate: dueDate ? dateToDb(dueDate) : null,
-      dueTime,
-      repeat: cleanRepeat(input.repeat),
-      categoryId,
-      subtasks: {
-        create: cleanSteps(input.steps).map((step, position) => ({ ...step, position })),
+  // One transaction: if saving the task fails, a brand-new category isn't left behind.
+  const row = await asCurrentUser(async (tx, userId) =>
+    tx.task.create({
+      data: {
+        userId,
+        title,
+        notes,
+        priority,
+        dueDate: dueDate ? dateToDb(dueDate) : null,
+        dueTime,
+        repeat,
+        categoryId: await categoryIdFor(tx, userId, input.category),
+        subtasks: {
+          create: steps.map((step, position) => ({ ...step, position })),
+        },
       },
-    },
-    include: taskInclude,
-  });
+      include: taskInclude,
+    }),
+  );
   return toDTO(row);
 }
 
 export async function updateTask(id: string, changes: TaskChanges): Promise<TaskDTO> {
-  const user = await getCurrentUser();
-  const current = await findOwnedTask(user.id, id);
+  const row = await asCurrentUser(async (tx, userId) => {
+    const current = await findOwnedTask(tx, userId, id);
 
-  const data: Prisma.TaskUncheckedUpdateInput = {};
-  if (changes.title !== undefined) data.title = cleanTitle(changes.title);
-  if (changes.notes !== undefined) data.notes = cleanNotes(changes.notes);
-  if (changes.priority !== undefined) {
-    const priority = cleanPriority(changes.priority);
-    if (!priority) throw new TaskError("Priority must be high, medium or low.");
-    data.priority = priority;
-  }
-  if (changes.category !== undefined) data.categoryId = await categoryIdFor(user.id, changes.category);
-  if (changes.repeat !== undefined) data.repeat = cleanRepeat(changes.repeat);
+    const data: Prisma.TaskUncheckedUpdateInput = {};
+    if (changes.title !== undefined) data.title = cleanTitle(changes.title);
+    if (changes.notes !== undefined) data.notes = cleanNotes(changes.notes);
+    if (changes.priority !== undefined) {
+      const priority = cleanPriority(changes.priority);
+      if (!priority) throw new TaskError("Priority must be high, medium or low.");
+      data.priority = priority;
+    }
+    if (changes.category !== undefined) data.categoryId = await categoryIdFor(tx, userId, changes.category);
+    if (changes.repeat !== undefined) data.repeat = cleanRepeat(changes.repeat);
 
-  // Date and time are checked together: clearing the date also clears the time.
-  if (changes.dueDate !== undefined || changes.dueTime !== undefined) {
-    const dueDate = changes.dueDate !== undefined ? cleanDate(changes.dueDate) : current.dueDate;
-    const dueTime = changes.dueTime !== undefined ? cleanTime(changes.dueTime) : current.dueTime;
-    data.dueDate = dueDate ? dateToDb(dueDate) : null;
-    data.dueTime = dueDate ? dueTime : null;
-  }
+    // Date and time are checked together: clearing the date also clears the time.
+    if (changes.dueDate !== undefined || changes.dueTime !== undefined) {
+      const dueDate = changes.dueDate !== undefined ? cleanDate(changes.dueDate) : current.dueDate;
+      const dueTime = changes.dueTime !== undefined ? cleanTime(changes.dueTime) : current.dueTime;
+      data.dueDate = dueDate ? dateToDb(dueDate) : null;
+      data.dueTime = dueDate ? dueTime : null;
+    }
 
-  const row = await db.task.update({
-    where: { id: current.id, userId: user.id },
-    data,
-    include: taskInclude,
+    return tx.task.update({
+      where: { id: current.id, userId },
+      data,
+      include: taskInclude,
+    });
   });
   return toDTO(row);
 }
@@ -299,28 +314,33 @@ export type DoneResult =
 // Tick a task off, or untick it. Ticking a repeating task doesn't mark it
 // done: it records the tick and moves the task to its next date instead.
 export async function setTaskDone(id: string, done: boolean): Promise<DoneResult> {
-  const user = await getCurrentUser();
-  const current = await findOwnedTask(user.id, id);
-  if (done && current.repeat && !current.done) {
-    return completeRepeatingTask(user.id, { ...current, repeat: current.repeat });
-  }
-  await db.task.update({
-    where: { id: current.id, userId: user.id },
-    data: { done, doneAt: done ? new Date() : null },
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  // "Today" in the user's own time zone, not the server's (needed if it repeats).
+  const { today } = nowIn(await getTimeZone());
+  return asCurrentUser(async (tx, userId): Promise<DoneResult> => {
+    const current = await findOwnedTask(tx, userId, id);
+    if (done && current.repeat && !current.done) {
+      return completeRepeatingTask(tx, userId, { ...current, repeat: current.repeat }, today);
+    }
+    await tx.task.update({
+      where: { id: current.id, userId },
+      data: { done, doneAt: done ? new Date() : null },
+    });
+    return { rolled: false };
   });
-  return { rolled: false };
 }
 
 // Puts a repeating task back the way it was before one tick: its old due
 // date, its ticked steps, and removes the tick from its history. Only the
 // task's most recent tick can be undone, so the history never gets tangled.
 export async function undoCompletion(completionId: string): Promise<void> {
-  const user = await getCurrentUser();
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
   if (!isUuid(completionId)) throw new TaskError("That's already been undone.");
 
-  await db.$transaction(async (tx) => {
+  // All of this is one transaction: it all happens, or none of it does.
+  await asCurrentUser(async (tx, userId) => {
     const completion = await tx.taskCompletion.findFirst({
-      where: { id: completionId, task: { userId: user.id } },
+      where: { id: completionId, task: { userId } },
       select: { id: true, taskId: true, previousDueDate: true, stepsDone: true },
     });
     if (!completion) throw new TaskError("That's already been undone.");
@@ -338,7 +358,7 @@ export async function undoCompletion(completionId: string): Promise<void> {
     if (count === 0) throw new TaskError("That's already been undone.");
 
     await tx.task.update({
-      where: { id: completion.taskId, userId: user.id },
+      where: { id: completion.taskId, userId },
       data: { dueDate: completion.previousDueDate },
     });
     if (completion.stepsDone.length > 0) {
@@ -352,11 +372,11 @@ export async function undoCompletion(completionId: string): Promise<void> {
 }
 
 export async function deleteTask(id: string): Promise<void> {
-  const user = await getCurrentUser();
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
   if (!isUuid(id)) throw new TaskError("That task doesn't exist.");
   // deleteMany lets us filter by userId too; it deletes 0 rows if the task
   // isn't yours. Its subtasks and history are removed with it (cascade).
-  const { count } = await db.task.deleteMany({ where: { id, userId: user.id } });
+  const { count } = await asCurrentUser((tx, userId) => tx.task.deleteMany({ where: { id, userId } }));
   if (count === 0) throw new TaskError("That task doesn't exist.");
 }
 
@@ -365,43 +385,61 @@ export async function deleteTask(id: string): Promise<void> {
 
 // Adds a step to the end of a task's checklist.
 export async function addStep(taskId: string, title: string): Promise<StepDTO> {
-  const user = await getCurrentUser();
-  const task = await findOwnedTask(user.id, taskId);
-  const clean = cleanStepTitle(title);
+  return asCurrentUser(async (tx, userId) => {
+    const task = await findOwnedTask(tx, userId, taskId);
+    const clean = cleanStepTitle(title);
 
-  const { _count, _max } = await db.subtask.aggregate({
-    where: { taskId: task.id },
-    _count: true,
-    _max: { position: true },
-  });
-  if (_count >= MAX_STEPS) throw new TaskError(`A task can have up to ${MAX_STEPS} steps.`);
+    const { _count, _max } = await tx.subtask.aggregate({
+      where: { taskId: task.id },
+      _count: true,
+      _max: { position: true },
+    });
+    if (_count >= MAX_STEPS) throw new TaskError(`A task can have up to ${MAX_STEPS} steps.`);
 
-  return db.subtask.create({
-    data: { taskId: task.id, title: clean, position: (_max.position ?? -1) + 1 },
-    select: { id: true, title: true, done: true },
+    return tx.subtask.create({
+      data: { taskId: task.id, title: clean, position: (_max.position ?? -1) + 1 },
+      select: { id: true, title: true, done: true },
+    });
   });
 }
 
 export async function setStepDone(stepId: string, done: boolean): Promise<void> {
-  const user = await getCurrentUser();
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
   if (!isUuid(stepId)) throw new TaskError("That step doesn't exist.");
   // updateMany lets us filter by the task's owner too; it changes 0 rows if
   // the step isn't yours.
-  const { count } = await db.subtask.updateMany({
-    where: { id: stepId, task: { userId: user.id } },
-    data: { done },
-  });
+  const { count } = await asCurrentUser((tx, userId) =>
+    tx.subtask.updateMany({
+      where: { id: stepId, task: { userId } },
+      data: { done },
+    }),
+  );
   if (count === 0) throw new TaskError("That step doesn't exist.");
 }
 
 export async function deleteStep(stepId: string): Promise<void> {
-  const user = await getCurrentUser();
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
   if (!isUuid(stepId)) throw new TaskError("That step doesn't exist.");
-  const { count } = await db.subtask.deleteMany({ where: { id: stepId, task: { userId: user.id } } });
+  const { count } = await asCurrentUser((tx, userId) =>
+    tx.subtask.deleteMany({ where: { id: stepId, task: { userId } } }),
+  );
   if (count === 0) throw new TaskError("That step doesn't exist.");
 }
 
 // ─── Helpers (private to this file) ──────────────────────────────────────────
+
+// The way every function in this file reaches the database: checks who's
+// signed in (signed-out visitors are sent to /login), then runs `work` in one
+// transaction as that user, so the database's row level security rules apply.
+//
+// Anything that reads the current time (Date.now(), new Date(), nowIn) must run
+// AFTER the login check — inside `work`, or after an `await getCurrentUser()`.
+// The login check is what tells Next.js the page depends on the live request;
+// reading the clock before it makes Next.js stop with a "Blocking Route" error.
+async function asCurrentUser<T>(work: (tx: Db, userId: string) => Promise<T>): Promise<T> {
+  const user = await getCurrentUser();
+  return runAsUser(user.id, (tx) => work(tx, user.id));
+}
 
 type TaskRow = Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
 
@@ -424,9 +462,9 @@ function toDTO(row: TaskRow): TaskDTO {
 
 // Loads a task only if it belongs to this user; otherwise acts as if it
 // doesn't exist (so nobody can learn which ids are real).
-async function findOwnedTask(userId: string, id: string) {
+async function findOwnedTask(tx: Db, userId: string, id: string) {
   if (!isUuid(id)) throw new TaskError("That task doesn't exist.");
-  const row = await db.task.findFirst({
+  const row = await tx.task.findFirst({
     where: { id, userId },
     select: { id: true, dueDate: true, dueTime: true, repeat: true, done: true },
   });
@@ -435,59 +473,57 @@ async function findOwnedTask(userId: string, id: string) {
 }
 
 // Records one tick of a repeating task, moves it to its next date and
-// unticks its steps — all together or not at all (a "transaction").
+// unticks its steps. It runs inside the caller's transaction, so it all
+// happens together or not at all.
 async function completeRepeatingTask(
+  tx: Db,
   userId: string,
   task: { id: string; dueDate: string | null; repeat: Repeat },
+  today: string, // in the user's own time zone
 ): Promise<DoneResult> {
-  // "Today" in the user's own time zone, not the server's.
-  const { today } = nowIn(await getTimeZone());
   const nextDate = nextRepeatDate(task.repeat, task.dueDate, today);
 
-  const completionId = await db.$transaction(async (tx) => {
-    // Only moves the task if it still has the due date we just read, so a
-    // quick double tap can't push it forward twice.
-    const { count } = await tx.task.updateMany({
-      where: { id: task.id, userId, done: false, dueDate: task.dueDate ? dateToDb(task.dueDate) : null },
-      data: { dueDate: dateToDb(nextDate) },
-    });
-    if (count === 0) throw new TaskError("That task just changed. Try again.");
+  // Only moves the task if it still has the due date we just read, so a
+  // quick double tap can't push it forward twice.
+  const { count } = await tx.task.updateMany({
+    where: { id: task.id, userId, done: false, dueDate: task.dueDate ? dateToDb(task.dueDate) : null },
+    data: { dueDate: dateToDb(nextDate) },
+  });
+  if (count === 0) throw new TaskError("That task just changed. Try again.");
 
-    const ticked = await tx.subtask.findMany({ where: { taskId: task.id, done: true }, select: { id: true } });
-    if (ticked.length > 0) {
-      await tx.subtask.updateMany({ where: { taskId: task.id, done: true }, data: { done: false } });
-    }
-    const completion = await tx.taskCompletion.create({
-      data: {
-        taskId: task.id,
-        completedOn: dateToDb(today),
-        previousDueDate: task.dueDate ? dateToDb(task.dueDate) : null,
-        stepsDone: ticked.map((s) => s.id),
-      },
-      select: { id: true },
-    });
-    return completion.id;
+  const ticked = await tx.subtask.findMany({ where: { taskId: task.id, done: true }, select: { id: true } });
+  if (ticked.length > 0) {
+    await tx.subtask.updateMany({ where: { taskId: task.id, done: true }, data: { done: false } });
+  }
+  const completion = await tx.taskCompletion.create({
+    data: {
+      taskId: task.id,
+      completedOn: dateToDb(today),
+      previousDueDate: task.dueDate ? dateToDb(task.dueDate) : null,
+      stepsDone: ticked.map((s) => s.id),
+    },
+    select: { id: true },
   });
 
-  return { rolled: true, completionId, nextDate, today };
+  return { rolled: true, completionId: completion.id, nextDate, today };
 }
 
 // Turns a typed category name into its id, creating the category the first
 // time it's used. Blank means "no category".
-async function categoryIdFor(userId: string, name: string | null | undefined): Promise<string | null> {
+async function categoryIdFor(tx: Db, userId: string, name: string | null | undefined): Promise<string | null> {
   const clean = (name ?? "").trim().replace(/\s+/g, " ");
   if (!clean) return null;
   if (clean.length > MAX_CATEGORY) throw new TaskError(`Category names can be up to ${MAX_CATEGORY} characters.`);
 
   // Reuse an existing category even if the capitals differ ("fitness" → "Fitness").
-  const existing = await db.category.findFirst({
+  const existing = await tx.category.findFirst({
     where: { userId, name: { equals: clean, mode: "insensitive" } },
     select: { id: true },
   });
   if (existing) return existing.id;
 
   // upsert (not create) so two saves at the same moment can't make duplicates.
-  const created = await db.category.upsert({
+  const created = await tx.category.upsert({
     where: { userId_name: { userId, name: clean } },
     create: { userId, name: clean },
     update: {},
