@@ -69,6 +69,35 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+html {
+  background: var(--bg);
+  /* No rubber-band bounce past the top or bottom of the page. */
+  overscroll-behavior: none;
+  /* No double-tap-to-zoom, so quick taps (like ticking two tasks) never zoom. */
+  touch-action: manipulation;
+}
+
+/* iPhone zooms in on any text box with text under 16px. Ours are all 16px;
+   this is a safety net for any box added later. (In the "base" layer so a
+   size set on a particular box still wins.) */
+@layer base {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
+/* Holding a finger on a button or tab shouldn't select its text or pop up the
+   iPhone's copy / look-up menu, just like a real app. */
+button,
+nav a,
+label:has(> input[type="radio"]) {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
 /* Stop the page behind the task editor from scrolling while it's open. */
 body:has(dialog[open]) {
   overflow: hidden;

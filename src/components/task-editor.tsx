@@ -14,8 +14,9 @@ import {
 import type { TaskDTO } from "@/lib/tasks";
 import { isValidDay } from "@/lib/dates";
 import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
-import { fieldLabel, input, segment } from "./form-styles";
+import { dateTimeFix, fieldLabel, input, segment } from "./form-styles";
 import { StepsEditor } from "./steps-editor";
+import { useFitVisibleScreen } from "./use-fit-visible-screen";
 
 // Everything for adding and editing tasks:
 //   • TaskEditorProvider — wraps a screen; owns "is the editor open, and for which task?"
@@ -203,6 +204,7 @@ function TaskSheet({
   useEffect(() => {
     dialogRef.current?.showModal();
   }, []);
+  useFitVisibleScreen(dialogRef);
 
   return (
     <dialog
@@ -213,7 +215,7 @@ function TaskSheet({
       onClick={(e) => e.target === e.currentTarget && onClose()}
       className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
     >
-      <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
+      <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
         <div className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 id="sheet-title" className="font-display text-[1.2rem] font-bold">
@@ -294,7 +296,7 @@ function TaskSheet({
                 name="dueDate"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
-                className={input}
+                className={`${input} ${dateTimeFix}`}
               />
             </label>
             <label className={fieldLabel}>
@@ -304,7 +306,7 @@ function TaskSheet({
                 name="dueTime"
                 defaultValue={task?.dueTime ?? ""}
                 disabled={!dueDate}
-                className={input}
+                className={`${input} ${dateTimeFix}`}
               />
             </label>
           </div>

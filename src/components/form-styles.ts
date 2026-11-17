@@ -7,6 +7,11 @@ export const fieldLabel = "flex flex-col gap-[5px] text-[0.8rem] font-bold text-
 export const input =
   "w-full rounded-[10px] border border-line bg-surface px-3 py-2.5 text-base font-normal text-ink disabled:opacity-50";
 
+// Extra classes for date and time boxes. On iPhone an empty one shrinks shorter
+// than the other boxes and centres its text; this keeps them the same height
+// and left-aligned like everything else.
+export const dateTimeFix = "min-h-[46px] appearance-none text-left [&::-webkit-date-and-time-value]:text-left";
+
 // One option in a segmented switch (Priority, Repeats): a hidden radio button
 // inside a label, so tapping anywhere on the label picks it.
 export const segment =
