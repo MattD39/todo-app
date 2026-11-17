@@ -15,6 +15,8 @@ export function TaskGroup({
   timeZone,
   warn = false,
   hideTodayDate = false,
+  planned = false,
+  isLocked,
 }: {
   title: string;
   tasks: TaskDTO[];
@@ -22,6 +24,8 @@ export function TaskGroup({
   timeZone: string;
   warn?: boolean; // red heading, for Overdue
   hideTodayDate?: boolean; // on Today, "Today" on every row would be noise
+  planned?: boolean; // later repeats on the Calendar: view only, no tick box
+  isLocked?: (task: TaskDTO) => boolean; // tick box shown but can't be tapped
 }) {
   if (tasks.length === 0) return null;
   return (
@@ -37,7 +41,15 @@ export function TaskGroup({
       <ul className="overflow-hidden rounded-[14px] border border-line bg-surface">
         {tasks.map((task) => (
           // A repeating task ticked twice today has two entries, so ticks use their own id.
-          <TaskRow key={task.completionId ?? task.id} task={task} now={now} timeZone={timeZone} hideTodayDate={hideTodayDate} />
+          <TaskRow
+            key={task.completionId ?? task.id}
+            task={task}
+            now={now}
+            timeZone={timeZone}
+            hideTodayDate={hideTodayDate}
+            planned={planned}
+            locked={isLocked?.(task) ?? false}
+          />
         ))}
       </ul>
     </section>
@@ -49,14 +61,18 @@ function TaskRow({
   now,
   timeZone,
   hideTodayDate,
+  planned,
+  locked,
 }: {
   task: TaskDTO;
   now: Now;
   timeZone: string;
   hideTodayDate: boolean;
+  planned: boolean;
+  locked: boolean;
 }) {
-  const overdue = isOverdue(task, now);
-  const due = dueLabel(task, now, overdue, hideTodayDate);
+  const overdue = !planned && isOverdue(task, now);
+  const due = planned ? null : dueLabel(task, now, overdue, hideTodayDate);
 
   return (
     <li
@@ -64,9 +80,17 @@ function TaskRow({
         overdue ? "bg-over-soft" : ""
       }`}
     >
-      <CheckButton task={task} />
+      {planned ? (
+        // A later repeat can't be ticked (only the next one can), so a faint
+        // ↻ sits where the tick box would be.
+        <span aria-hidden className="mt-px grid size-[26px] flex-none place-items-center text-muted opacity-60">
+          ↻
+        </span>
+      ) : (
+        <CheckButton task={task} today={now.today} locked={locked} />
+      )}
       {/* Tapping the title area opens the editor. */}
-      <OpenTaskButton task={task} className="min-w-0 flex-1 text-left">
+      <OpenTaskButton task={task} className={`min-w-0 flex-1 text-left ${planned ? "opacity-60" : ""}`}>
         <div className={`font-bold [overflow-wrap:anywhere] ${task.done ? "text-muted line-through" : ""}`}>
           {task.title}
         </div>
@@ -79,10 +103,13 @@ function TaskRow({
           {task.repeat && <span>↻ {REPEAT_LABEL[task.repeat]}</span>}
           {/* Not on a repeating task's "Finished today" entry: its steps have
               already been reset for next time, so "0/3" would look wrong. */}
-          {task.steps.length > 0 && !task.completionId && (
+          {task.steps.length > 0 && !task.completionId && !planned && (
             <span>
               {task.steps.filter((s) => s.done).length}/{task.steps.length} steps
             </span>
+          )}
+          {planned && task.dueDate && (
+            <span className="font-mono text-[0.76rem]">Next due: {relDay(task.dueDate, now.today)}</span>
           )}
           {task.completionId && task.dueDate && (
             <span className="font-mono text-[0.76rem]">Next: {relDay(task.dueDate, now.today)}</span>

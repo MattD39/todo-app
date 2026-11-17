@@ -1,5 +1,5 @@
-import type { TaskDTO } from "./tasks";
-import { dayOf, isOverdue, type Now } from "./dates";
+import type { HistoryDTO, TaskDTO, TickDTO } from "./tasks";
+import { addDays, addMonths, dayOf, isOverdue, type Now } from "./dates";
 
 // Sorting tasks into the sections each screen shows. Pure functions (no
 // database, no clock of their own) so they're easy to test.
@@ -52,6 +52,64 @@ export function buildStats(open: TaskDTO[], now: Now): Stats {
 }
 
 // Only the tasks in one category, or all of them when category is null.
-export function inCategory(tasks: TaskDTO[], category: string | null): TaskDTO[] {
+export function inCategory<T extends TaskDTO>(tasks: T[], category: string | null): T[] {
   return category ? tasks.filter((t) => t.category?.name === category) : tasks;
+}
+
+// The dots on the Calendar: how many unfinished tasks fall on each day,
+// whether any of them is overdue (red dots), and how many later repeats of
+// weekly/monthly tasks land there (faint dots). Days with nothing aren't listed.
+export type DayMark = { count: number; overdue: boolean; repeats: number };
+
+export function calendarMarks(
+  open: TaskDTO[],
+  repeats: Record<string, string[]>, // from futureRepeats
+  now: Now,
+): Record<string, DayMark> {
+  const marks: Record<string, DayMark> = {};
+  const markFor = (day: string) => (marks[day] ??= { count: 0, overdue: false, repeats: 0 });
+  for (const task of open) {
+    if (!task.dueDate) continue;
+    const mark = markFor(task.dueDate);
+    mark.count++;
+    if (isOverdue(task, now)) mark.overdue = true;
+  }
+  for (const [day, ids] of Object.entries(repeats)) markFor(day).repeats = ids.length;
+  return marks;
+}
+
+// Where weekly and monthly tasks will land after their next due date, for
+// planning: day → ids of the tasks repeating that day, for days from `from`
+// to `to`. Only days after today count (an overdue task's missed weeks
+// aren't shown). Daily tasks are left out — a dot on every day is just noise.
+// Uses the same steps as ticking a task off (nextRepeatDate), so the dates match.
+export function futureRepeats(open: TaskDTO[], from: string, to: string, today: string): Record<string, string[]> {
+  const byDay: Record<string, string[]> = {};
+  for (const task of open) {
+    if (!task.dueDate || (task.repeat !== "weekly" && task.repeat !== "monthly")) continue;
+    const base = task.dueDate;
+    const step = (i: number) => (task.repeat === "weekly" ? addDays(base, 7 * i) : addMonths(base, i));
+    for (let i = 1, day = step(1); day <= to; day = step(++i)) {
+      if (day >= from && day > today) (byDay[day] ??= []).push(task.id);
+    }
+  }
+  return byDay;
+}
+
+// One day's history on the Calendar.
+//   finished: one-off tasks finished that day, plus repeating-task ticks done
+//             that day — most recent first.
+//   movedOn:  repeating tasks that were due that day but ticked on another
+//             day ("Done early on Tue, Nov 17"), so they don't seem to vanish.
+export function dayHistory(
+  history: HistoryDTO,
+  day: string,
+  timeZone: string,
+): { finished: TaskDTO[]; movedOn: TickDTO[] } {
+  const finished = [
+    ...history.done.filter((t) => t.doneAt && dayOf(t.doneAt, timeZone) === day),
+    ...history.ticks.filter((t) => t.completedOn === day),
+  ].sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? ""));
+  const movedOn = history.ticks.filter((t) => t.previousDueDate === day && t.completedOn !== day);
+  return { finished, movedOn };
 }

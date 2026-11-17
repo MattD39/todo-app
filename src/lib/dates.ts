@@ -54,6 +54,34 @@ export function addMonths(day: string, n: number): string {
   return first.toISOString().slice(0, 10);
 }
 
+// True for a real calendar day written as "YYYY-MM-DD" (rejects "2026-02-30").
+export function isValidDay(day: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const d = new Date(`${day}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === day;
+}
+
+// The days a month calendar shows, Sunday first: starts on the Sunday on or
+// before the 1st and fills whole weeks — 5 rows usually, 6 when the month
+// spills over. `month` is any day in that month.
+export function monthGrid(month: string): string[] {
+  const first = `${month.slice(0, 7)}-01`;
+  const startDow = new Date(`${first}T00:00:00Z`).getUTCDay();
+  const start = addDays(first, -startDow);
+  const days = Array.from({ length: 42 }, (_, i) => addDays(start, i));
+  // Drop the 6th row if it's entirely next month.
+  return days[35].slice(0, 7) !== first.slice(0, 7) ? days.slice(0, 35) : days;
+}
+
+// e.g. "November 2026"
+export function formatMonth(day: string): string {
+  return new Date(`${day.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    month: "long",
+    year: "numeric",
+  });
+}
+
 // Where a repeating task moves to when it's ticked off: one step on from its
 // due date (or from today, if it has none), and keeps stepping until the date
 // is after today, so a task that was days overdue doesn't land in the past.
@@ -67,6 +95,17 @@ export function nextRepeatDate(repeat: "daily" | "weekly" | "monthly", dueDate: 
   let next = step(i);
   while (next <= today) next = step(++i);
   return next;
+}
+
+// Ticking a repeating task before its due day counts as doing it early, so
+// the app asks first. Returns the due date and where the task would move to,
+// or null when it isn't early (due today, overdue, no date, or not repeating).
+export function earlyTick(
+  task: { repeat: "daily" | "weekly" | "monthly" | null; dueDate: string | null },
+  today: string,
+): { dueDate: string; nextDate: string } | null {
+  if (!task.repeat || !task.dueDate || task.dueDate <= today) return null;
+  return { dueDate: task.dueDate, nextDate: nextRepeatDate(task.repeat, task.dueDate, today) };
 }
 
 // Overdue = due on an earlier day, or due earlier today at a set time.

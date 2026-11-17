@@ -7,11 +7,14 @@ import { buildStats } from "@/lib/views";
 import { signOut } from "@/app/login/actions";
 import { TimeZoneSync } from "@/app/timezone-sync";
 import { TaskEditorProvider } from "./task-editor";
+import { CategoryChips } from "./category-chips";
 
-// The frame shared by the Today, Upcoming and Done screens: title + date,
+export { Status } from "./status";
+
+// The frame shared by the Today, Upcoming, Calendar and Done screens: title + date,
 // summary line, category filter chips, the add/edit editor, and the tab bar.
 
-export type Tab = "today" | "upcoming" | "done";
+export type Tab = "today" | "upcoming" | "calendar" | "done";
 
 const TABS: { tab: Tab; label: string; path: string; icon: React.ReactNode }[] = [
   {
@@ -26,10 +29,21 @@ const TABS: { tab: Tab; label: string; path: string; icon: React.ReactNode }[] =
     ),
   },
   { tab: "upcoming", label: "Upcoming", path: "/upcoming", icon: <path d="M4 6h16M4 12h10M4 18h6" /> },
+  {
+    tab: "calendar",
+    label: "Calendar",
+    path: "/calendar",
+    icon: (
+      <>
+        <rect x="3" y="5" width="18" height="16" rx="2" />
+        <path d="M3 10h18M8 3v4M16 3v4" />
+      </>
+    ),
+  },
   { tab: "done", label: "Done", path: "/done", icon: <path d="M20 6 9 17l-5-5" /> },
 ];
 
-const TITLES: Record<Tab, string> = { today: "Today", upcoming: "Upcoming", done: "Done" };
+const TITLES: Record<Tab, string> = { today: "Today", upcoming: "Upcoming", calendar: "Calendar", done: "Done" };
 
 export type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -49,7 +63,7 @@ export type ScreenData = Awaited<ReturnType<typeof loadScreen>>;
 export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; children: React.ReactNode }) {
   const stats = buildStats(data.open, data.now);
   return (
-    <TaskEditorProvider categories={data.categories} defaultCategory={data.category}>
+    <TaskEditorProvider categories={data.categories} defaultCategory={data.category} today={data.now.today}>
       <TimeZoneSync serverTimeZone={data.timeZone} />
       <ScreenHeader
         tab={tab}
@@ -68,7 +82,7 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
           </>
         }
       >
-        <CategoryChips tab={tab} categories={data.categories} selected={data.category} />
+        <CategoryChips categories={data.categories} selected={data.category} />
       </ScreenHeader>
 
       {children}
@@ -126,34 +140,11 @@ function hrefFor(tab: Tab, category: string | null) {
   return category ? `${path}?cat=${encodeURIComponent(category)}` : path;
 }
 
-// "All · Business · Fitness …" — tap one to see only that category.
-function CategoryChips({ tab, categories, selected }: { tab: Tab; categories: string[]; selected: string | null }) {
-  if (categories.length === 0) return null;
-  const chip = "flex-none rounded-full border px-3 py-[5px] text-[0.88rem]";
-  const on = "border-ink bg-ink text-bg";
-  const off = "border-line bg-surface text-muted";
-  return (
-    <nav aria-label="Filter by category" className="-mx-0.5 flex gap-1.5 overflow-x-auto p-0.5 [scrollbar-width:none]">
-      {[null, ...categories].map((name) => (
-        <Link
-          key={name ?? "all"}
-          href={hrefFor(tab, name)}
-          scroll={false}
-          aria-current={name === selected ? "true" : undefined}
-          className={`${chip} ${name === selected ? on : off}`}
-        >
-          {name ?? "All"}
-        </Link>
-      ))}
-    </nav>
-  );
-}
-
 function TabBar({ current, category }: { current: Tab; category: string | null }) {
   return (
     <nav
       aria-label="Screens"
-      className="fixed inset-x-0 bottom-0 z-[6] grid grid-cols-3 border-t border-line bg-surface pr-[max(8px,env(safe-area-inset-right,0px))] pb-[env(safe-area-inset-bottom,0px)] pl-[max(8px,env(safe-area-inset-left,0px))]"
+      className="fixed inset-x-0 bottom-0 z-[6] grid grid-cols-4 border-t border-line bg-surface pr-[max(8px,env(safe-area-inset-right,0px))] pb-[env(safe-area-inset-bottom,0px)] pl-[max(8px,env(safe-area-inset-left,0px))]"
     >
       {TABS.map(({ tab, label, icon }) => (
         <Link
@@ -180,11 +171,5 @@ function TabBar({ current, category }: { current: Tab; category: string | null }
         </Link>
       ))}
     </nav>
-  );
-}
-
-export function Status({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="my-6 rounded-xl border border-dashed border-line p-4 text-center text-muted">{children}</div>
   );
 }

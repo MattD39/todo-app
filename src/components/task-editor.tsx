@@ -12,6 +12,7 @@ import {
   useTransition,
 } from "react";
 import type { TaskDTO } from "@/lib/tasks";
+import { isValidDay } from "@/lib/dates";
 import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
 import { fieldLabel, input, segment } from "./form-styles";
 import { StepsEditor } from "./steps-editor";
@@ -25,7 +26,8 @@ import { StepsEditor } from "./steps-editor";
 // This runs in the browser ("use client") so the sheet opens instantly.
 // Saving goes to the server through saveTask().
 
-type Editing = { mode: "new" } | { mode: "edit"; task: TaskDTO };
+// A new task can start with a date filled in (the day picked on the Calendar).
+type Editing = { mode: "new"; dueDate?: string } | { mode: "edit"; task: TaskDTO };
 
 const OpenEditor = createContext<(editing: Editing) => void>(() => {});
 // A toast can carry one button, e.g. Undo.
@@ -44,10 +46,12 @@ const STARTER_CATEGORIES = ["Personal", "Fitness", "Business", "Errands"];
 export function TaskEditorProvider({
   categories,
   defaultCategory,
+  today,
   children,
 }: {
   categories: string[];
   defaultCategory: string | null; // the filter chip that's on, if any — new tasks start in it
+  today: string; // in the user's time zone
   children: React.ReactNode;
 }) {
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -79,7 +83,7 @@ export function TaskEditorProvider({
     <OpenEditor value={open}>
       <ShowToast value={toast}>
         {children}
-        <AddTaskButton onClick={() => open({ mode: "new" })} />
+        <AddTaskButton onClick={() => open({ mode: "new", dueDate: calendarDay(today) })} />
         {editing && (
           <TaskSheet
             key={openCount}
@@ -114,6 +118,16 @@ export function TaskEditorProvider({
       </ShowToast>
     </OpenEditor>
   );
+}
+
+// On the Calendar, a new task starts on the selected day. That day is read
+// from the address bar (/calendar?day=2026-11-21), which the Calendar keeps
+// up to date as you tap days; no ?day= means today, as on the Calendar itself.
+// Other screens start with no date.
+function calendarDay(today: string): string | undefined {
+  if (window.location.pathname !== "/calendar") return undefined;
+  const day = new URLSearchParams(window.location.search).get("day");
+  return day && isValidDay(day) ? day : today;
 }
 
 export function OpenTaskButton({
@@ -176,7 +190,7 @@ function TaskSheet({
   const task = editing.mode === "edit" ? editing.task : null;
   const dialogRef = useRef<HTMLDialogElement>(null);
   // Tracked so the time box can be switched off when there's no date.
-  const [dueDate, setDueDate] = useState(task?.dueDate ?? "");
+  const [dueDate, setDueDate] = useState(task?.dueDate ?? (editing.mode === "new" ? (editing.dueDate ?? "") : ""));
 
   const [state, save, saving] = useActionState(async (prev: SaveTaskState, formData: FormData) => {
     const result = await saveTask(prev, formData);

@@ -3,7 +3,7 @@ import { getCurrentUser } from "./auth";
 import { db } from "./db";
 import { Prisma } from "@/generated/prisma/client";
 import type { Priority, Repeat } from "@/generated/prisma/enums";
-import { nextRepeatDate, nowIn } from "./dates";
+import { addDays, nextRepeatDate, nowIn } from "./dates";
 import { getTimeZone } from "./timezone";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +143,70 @@ export async function listRecentlyDoneTasks(): Promise<TaskDTO[]> {
   ];
   // ISO timestamps sort correctly as text.
   return entries.sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? ""));
+}
+
+// One tick of a repeating task, for the Calendar's history.
+export type TickDTO = TaskDTO & {
+  completionId: string;
+  completedOn: string; // the day it was ticked
+  previousDueDate: string | null; // the day it was due then
+  isLatest: boolean; // only a task's most recent tick can be undone
+};
+
+export type HistoryDTO = { done: TaskDTO[]; ticks: TickDTO[] };
+
+// What was finished between two days (inclusive), for the Calendar:
+// one-off tasks ticked off then, and repeating-task ticks that were either
+// done or due in that range (so the due day can say "Done early on …").
+export async function listHistory(from: string, to: string): Promise<HistoryDTO> {
+  const user = await getCurrentUser();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new TaskError("That isn't a valid date range.");
+  }
+  // doneAt is a moment in time; which day that was depends on the user's time
+  // zone, so fetch a day either side and let the screen pick the exact days.
+  const [rows, completions] = await Promise.all([
+    db.task.findMany({
+      where: {
+        userId: user.id,
+        done: true,
+        doneAt: { gte: dateToDb(addDays(from, -1)), lt: dateToDb(addDays(to, 2)) },
+      },
+      include: taskInclude,
+    }),
+    db.taskCompletion.findMany({
+      where: {
+        task: { userId: user.id },
+        OR: [
+          { completedOn: { gte: dateToDb(from), lte: dateToDb(to) } },
+          { previousDueDate: { gte: dateToDb(from), lte: dateToDb(to) } },
+        ],
+      },
+      include: { task: { include: taskInclude } },
+    }),
+  ]);
+
+  // The most recent tick of each of those tasks (it may be outside the range).
+  const latest = await db.taskCompletion.findMany({
+    where: { taskId: { in: [...new Set(completions.map((c) => c.taskId))] }, task: { userId: user.id } },
+    orderBy: { createdAt: "desc" },
+    distinct: ["taskId"],
+    select: { id: true },
+  });
+  const latestIds = new Set(latest.map((c) => c.id));
+
+  return {
+    done: rows.map(toDTO),
+    ticks: completions.map((c) => ({
+      ...toDTO(c.task),
+      done: true,
+      doneAt: c.createdAt.toISOString(),
+      completionId: c.id,
+      completedOn: dateFromDb(c.completedOn),
+      previousDueDate: c.previousDueDate ? dateFromDb(c.previousDueDate) : null,
+      isLatest: latestIds.has(c.id),
+    })),
+  };
 }
 
 export async function getTask(id: string): Promise<TaskDTO | null> {
