@@ -8,11 +8,13 @@
     "start": "next start",
     "lint": "eslint",
     "test:rls": "node --env-file=.env.local --test tests/rls.test.mts",
+    "check:claude": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-claude.mts",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.8.0",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
     "@supabase/ssr": "^0.12.7",
