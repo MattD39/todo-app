@@ -4,10 +4,10 @@ import { formatDay, nowIn } from "@/lib/dates";
 import { listCategories, listOpenTasks } from "@/lib/tasks";
 import { getTimeZone } from "@/lib/timezone";
 import { buildStats } from "@/lib/views";
-import { signOut } from "@/app/login/actions";
 import { TimeZoneSync } from "@/app/timezone-sync";
 import { TaskEditorProvider } from "./task-editor";
 import { CategoryChips } from "./category-chips";
+import { SettingsButton, SettingsButtonPlaceholder } from "./settings-menu";
 
 export { Status } from "./status";
 
@@ -67,6 +67,7 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
       <TimeZoneSync serverTimeZone={data.timeZone} />
       <ScreenHeader
         tab={tab}
+        email={data.user.email ?? ""}
         dateLine={formatDay(data.now.today)}
         stats={
           <>
@@ -87,14 +88,6 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
 
       {children}
 
-      {/* Temporary home for sign-out until there's a settings menu. */}
-      <form action={signOut} className="mt-10 flex items-center justify-between gap-3 text-[0.9rem] text-muted">
-        <span className="min-w-0 truncate">{data.user.email}</span>
-        <button type="submit" className="rounded-xl border border-line bg-surface px-3.5 py-2 font-bold text-ink">
-          Sign out
-        </button>
-      </form>
-
       <TabBar current={tab} category={data.category} />
     </TaskEditorProvider>
   );
@@ -112,22 +105,27 @@ export function ScreenLoading({ tab }: { tab: Tab }) {
 
 function ScreenHeader({
   tab,
+  email,
   dateLine,
   stats,
   children,
 }: {
   tab: Tab;
+  email?: string; // missing while the screen loads
   dateLine?: string;
   stats?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
     <header className="sticky top-[env(safe-area-inset-top,0px)] z-[5] flex flex-col gap-2.5 bg-bg pt-3.5 pb-2.5">
-      <div className="flex items-baseline justify-between gap-3">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="font-display text-[1.75rem] leading-[1.1] font-bold tracking-[-0.01em]">{TITLES[tab]}</h1>
-        <span className="font-mono text-[0.78rem] font-medium tracking-[0.06em] whitespace-nowrap text-muted uppercase">
-          {dateLine}
-        </span>
+        <div className="flex items-center gap-2.5">
+          <span className="font-mono text-[0.78rem] font-medium tracking-[0.06em] whitespace-nowrap text-muted uppercase">
+            {dateLine}
+          </span>
+          {email === undefined ? <SettingsButtonPlaceholder /> : <SettingsButton email={email} />}
+        </div>
       </div>
       <div className="text-[0.92rem] text-muted">{stats ?? " "}</div>
       {children}
