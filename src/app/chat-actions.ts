@@ -1,0 +1,28 @@
+"use server";
+
+import { refresh } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { applyChanges, cleanChanges, type ChangeResult } from "@/lib/chat-changes";
+
+// Saves the changes Claude queued in the Chat tab, straight after its reply.
+//
+// The browser sends the changes back, and anything from a browser can be
+// faked, so they're checked again here and saved through src/lib/tasks.ts:
+// only your own tasks, with the same checks as the app's buttons. (So this
+// can't do anything you couldn't do yourself by tapping.)
+export async function applyChatChanges(input: unknown): Promise<{ error: string | null; results?: ChangeResult[] }> {
+  try {
+    await getCurrentUser(); // signed-out visitors are turned away first
+    const changes = cleanChanges(input);
+    if (!changes) return { error: "Those changes didn't look right, so nothing was saved." };
+    const results = await applyChanges(changes);
+    if (results.some((r) => r.ok)) refresh(); // the other tabs show the new list
+    return { error: null, results };
+  } catch (error) {
+    // An expired login "throws" a redirect to /login; let Next.js carry it out.
+    unstable_rethrow(error);
+    console.error("Chat changes failed", error);
+    return { error: "Couldn't save the changes. Check your connection and try again." };
+  }
+}

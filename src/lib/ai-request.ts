@@ -117,6 +117,8 @@ export function claudeErrorMessage(error: unknown): string {
   // An expired login "throws" a redirect to /login; let Next.js carry it out.
   unstable_rethrow(error);
   if (error instanceof ClaudeError) return error.message;
+  // You pressed Stop (or closed the screen): not a problem, nothing to log.
+  if (error instanceof Anthropic.APIUserAbortError) return "Stopped.";
   if (error instanceof Anthropic.RateLimitError) {
     return "Claude is busy or the usage limit was reached. Try again in a bit.";
   }
