@@ -22,7 +22,7 @@ async function Today({ searchParams }: { searchParams: SearchParams }) {
   const { now, timeZone, category } = data;
   const view = buildToday(inCategory(data.open, category), inCategory(recentlyDone, category), now, timeZone);
   const nothingDue = !view.overdue.length && !view.dueToday.length && !view.anytime.length;
-  const shared = { now, timeZone };
+  const shared = { now, timeZone, swipe: true };
 
   return (
     <Screen tab="today" data={data}>

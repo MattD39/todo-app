@@ -2,6 +2,7 @@ import type { TaskDTO } from "@/lib/tasks";
 import { formatTime, isOverdue, relDay, dayOf, type Now } from "@/lib/dates";
 import { OpenTaskButton } from "./task-editor";
 import { CheckButton } from "./task-check";
+import { SwipeRow } from "./swipe-row";
 
 // The building blocks every list screen uses: a titled section (TaskGroup)
 // containing rows (TaskRow). Same look as the old app.
@@ -16,6 +17,7 @@ export function TaskGroup({
   warn = false,
   hideTodayDate = false,
   planned = false,
+  swipe = false,
   isLocked,
 }: {
   title: string;
@@ -26,6 +28,7 @@ export function TaskGroup({
   hideTodayDate?: boolean; // on Today, "Today" on every row would be noise
   planned?: boolean; // later repeats on the Calendar: view only, no tick box
   isLocked?: (task: TaskDTO) => boolean; // tick box shown but can't be tapped
+  swipe?: boolean; // swipe a row left to delete it (Today, Upcoming, Done)
 }) {
   if (tasks.length === 0) return null;
   return (
@@ -48,6 +51,7 @@ export function TaskGroup({
             timeZone={timeZone}
             hideTodayDate={hideTodayDate}
             planned={planned}
+            swipe={swipe && !planned}
             locked={isLocked?.(task) ?? false}
           />
         ))}
@@ -62,6 +66,7 @@ function TaskRow({
   timeZone,
   hideTodayDate,
   planned,
+  swipe,
   locked,
 }: {
   task: TaskDTO;
@@ -69,17 +74,14 @@ function TaskRow({
   timeZone: string;
   hideTodayDate: boolean;
   planned: boolean;
+  swipe: boolean;
   locked: boolean;
 }) {
   const overdue = !planned && isOverdue(task, now);
   const due = planned ? null : dueLabel(task, now, overdue, hideTodayDate);
 
-  return (
-    <li
-      className={`flex items-start gap-3 border-t border-line px-3.5 py-3 first:border-t-0 ${
-        overdue ? "bg-over-soft" : ""
-      }`}
-    >
+  const content = (
+    <>
       {planned ? (
         // A later repeat can't be ticked (only the next one can), so a faint
         // ↻ sits where the tick box would be.
@@ -119,6 +121,26 @@ function TaskRow({
           )}
         </div>
       </OpenTaskButton>
+    </>
+  );
+
+  if (swipe) {
+    // A repeating task's past entry ("Finished today") deletes just that
+    // entry; any other row deletes the whole task.
+    const target = task.completionId ? { completionId: task.completionId } : { taskId: task.id };
+    return (
+      <SwipeRow target={target} className={`px-3.5 py-3 ${overdue ? "bg-over-soft" : ""}`}>
+        {content}
+      </SwipeRow>
+    );
+  }
+  return (
+    <li
+      className={`flex items-start gap-3 border-t border-line px-3.5 py-3 first:border-t-0 ${
+        overdue ? "bg-over-soft" : ""
+      }`}
+    >
+      {content}
     </li>
   );
 }

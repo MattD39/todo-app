@@ -9,11 +9,17 @@ import {
   createTask,
   deleteStep,
   deleteTask,
+  deleteTaskWithCopy,
+  deleteTickWithCopy,
+  restoreDeletedTask,
+  restoreDeletedTick,
   setStepDone,
   setTaskDone,
   TaskError,
   undoCompletion,
   updateTask,
+  type DeletedTask,
+  type DeletedTick,
   type NewTaskInput,
   type StepDTO,
 } from "@/lib/tasks";
@@ -112,6 +118,32 @@ export async function undoTick(completionId: unknown): Promise<ActionResult> {
 export async function removeTask(id: unknown): Promise<ActionResult> {
   if (typeof id !== "string") return { error: "Something went wrong." };
   return run("delete", () => deleteTask(id));
+}
+
+// Swipe to delete: a whole task, or one tick of a repeating task (one entry
+// in its history). The result carries a copy for the "Deleted · Undo" bar.
+export async function swipeDelete(
+  target: unknown,
+): Promise<ActionResult & { value?: { task: DeletedTask } | { tick: DeletedTick } }> {
+  const { taskId, completionId } = (typeof target === "object" && target !== null ? target : {}) as Record<
+    string,
+    unknown
+  >;
+  if (typeof completionId === "string") {
+    return run("delete", async () => ({ tick: await deleteTickWithCopy(completionId) }));
+  }
+  if (typeof taskId === "string") {
+    return run("delete", async () => ({ task: await deleteTaskWithCopy(taskId) }));
+  }
+  return { error: "Something went wrong." };
+}
+
+// Undo for swipe to delete: puts the copy back (checked again in tasks.ts).
+export async function undoSwipeDelete(copy: unknown): Promise<ActionResult> {
+  const { task, tick } = (typeof copy === "object" && copy !== null ? copy : {}) as Record<string, unknown>;
+  if (task) return run("undo", () => restoreDeletedTask(task));
+  if (tick) return run("undo", () => restoreDeletedTick(tick));
+  return { error: "That can't be undone." };
 }
 
 // Shared by every action: do the change, turn problems into a friendly

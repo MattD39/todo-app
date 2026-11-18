@@ -25,7 +25,14 @@ async function Upcoming({ searchParams }: { searchParams: SearchParams }) {
         <Status>No tasks scheduled after today. Add one with a due date to see it here.</Status>
       )}
       {days.map(({ day, tasks }) => (
-        <TaskGroup key={day} title={relDay(day, data.now.today)} tasks={tasks} now={data.now} timeZone={data.timeZone} />
+        <TaskGroup
+          key={day}
+          title={relDay(day, data.now.today)}
+          tasks={tasks}
+          now={data.now}
+          timeZone={data.timeZone}
+          swipe
+        />
       ))}
     </Screen>
   );

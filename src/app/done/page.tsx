@@ -31,6 +31,7 @@ async function Done({ searchParams }: { searchParams: SearchParams }) {
           tasks={tasks}
           now={data.now}
           timeZone={data.timeZone}
+          swipe
         />
       )}
     </Screen>

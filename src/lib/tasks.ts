@@ -380,6 +380,204 @@ export async function deleteTask(id: string): Promise<void> {
   if (count === 0) throw new TaskError("That task doesn't exist.");
 }
 
+// ─── Delete with Undo (swipe to delete) ──────────────────────────────────────
+// The delete is real and happens at once: the rows are gone from the
+// database (so nothing, Claude included, can see them). For a few seconds
+// the screen keeps the copy returned here, and Undo hands it back to be
+// put back exactly as it was, with the same ids.
+
+// Everything needed to put a deleted task back: the task, its steps and the
+// history of its ticks (if it repeats).
+export type DeletedTask = {
+  id: string;
+  title: string;
+  notes: string;
+  priority: string;
+  dueDate: string | null; // "YYYY-MM-DD"
+  dueTime: string | null;
+  repeat: string | null;
+  done: boolean;
+  doneAt: string | null; // ISO
+  category: string | null; // its name
+  createdAt: string; // ISO
+  steps: { id: string; title: string; done: boolean; position: number; createdAt: string }[];
+  ticks: DeletedTick[];
+};
+
+// One tick of a repeating task (one entry in its history).
+export type DeletedTick = {
+  id: string;
+  taskId: string;
+  completedOn: string; // "YYYY-MM-DD"
+  previousDueDate: string | null;
+  stepsDone: string[];
+  createdAt: string; // ISO
+};
+
+// Deletes a whole task (steps and history too) and returns a copy for Undo.
+export async function deleteTaskWithCopy(id: string): Promise<DeletedTask> {
+  return asCurrentUser(async (tx, userId) => {
+    const current = await findOwnedTask(tx, userId, id);
+    const row = await tx.task.findFirstOrThrow({
+      where: { id: current.id, userId },
+      include: {
+        category: true,
+        subtasks: { orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
+        completions: { orderBy: { createdAt: "asc" } },
+      },
+    });
+    const { count } = await tx.task.deleteMany({ where: { id: row.id, userId } });
+    if (count === 0) throw new TaskError("That task doesn't exist.");
+    return {
+      id: row.id,
+      title: row.title,
+      notes: row.notes,
+      priority: row.priority,
+      dueDate: row.dueDate ? dateFromDb(row.dueDate) : null,
+      dueTime: row.dueTime,
+      repeat: row.repeat,
+      done: row.done,
+      doneAt: row.doneAt?.toISOString() ?? null,
+      category: row.category?.name ?? null,
+      createdAt: row.createdAt.toISOString(),
+      steps: row.subtasks.map((s) => ({
+        id: s.id,
+        title: s.title,
+        done: s.done,
+        position: s.position,
+        createdAt: s.createdAt.toISOString(),
+      })),
+      ticks: row.completions.map(tickCopy),
+    };
+  });
+}
+
+// Puts a deleted task back from its copy. The copy comes back from the
+// browser, so every field is checked again like any other input.
+export async function restoreDeletedTask(input: unknown): Promise<void> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  const copy = asObject(input);
+  const id = copy.id;
+  if (!isUuid(id)) throw new TaskError("That can't be undone.");
+  const title = cleanTitle(copy.title);
+  const notes = cleanNotes(copy.notes);
+  const priority = cleanPriority(copy.priority) ?? "medium";
+  const dueDate = cleanDate(copy.dueDate);
+  const dueTime = dueDate ? cleanTime(copy.dueTime) : null;
+  const repeat = cleanRepeat(copy.repeat);
+  const done = copy.done === true;
+  const doneAt = done ? cleanMoment(copy.doneAt) : null;
+  const createdAt = cleanMoment(copy.createdAt) ?? new Date();
+  const steps = Array.isArray(copy.steps) ? copy.steps.map(asObject) : [];
+  if (steps.length > MAX_STEPS) throw new TaskError("That can't be undone.");
+  const ticks = Array.isArray(copy.ticks) ? copy.ticks.map(asObject) : [];
+  if (ticks.length > 5000) throw new TaskError("That can't be undone.");
+
+  await asCurrentUser(async (tx, userId) => {
+    if (await tx.task.findFirst({ where: { id }, select: { id: true } })) {
+      throw new TaskError("It's already back.");
+    }
+    await tx.task.create({
+      data: {
+        id,
+        userId,
+        title,
+        notes,
+        priority,
+        dueDate: dueDate ? dateToDb(dueDate) : null,
+        dueTime,
+        repeat,
+        done,
+        doneAt,
+        createdAt,
+        categoryId: await categoryIdFor(tx, userId, typeof copy.category === "string" ? copy.category : null),
+        subtasks: {
+          create: steps.map((s, i) => ({
+            ...(isUuid(s.id) ? { id: s.id } : {}),
+            title: cleanStepTitle(s.title),
+            done: s.done === true,
+            position: Number.isInteger(s.position) ? (s.position as number) : i,
+            createdAt: cleanMoment(s.createdAt) ?? new Date(),
+          })),
+        },
+        completions: { create: ticks.map(cleanTickFields) },
+      },
+    });
+  });
+}
+
+// Deletes one tick of a repeating task (one history entry). The task itself
+// stays exactly as it is, next date included. Returns a copy for Undo.
+export async function deleteTickWithCopy(completionId: string): Promise<DeletedTick> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!isUuid(completionId)) throw new TaskError("That entry doesn't exist.");
+  return asCurrentUser(async (tx, userId) => {
+    const tick = await tx.taskCompletion.findFirst({ where: { id: completionId, task: { userId } } });
+    if (!tick) throw new TaskError("That entry doesn't exist.");
+    const { count } = await tx.taskCompletion.deleteMany({ where: { id: tick.id, task: { userId } } });
+    if (count === 0) throw new TaskError("That entry doesn't exist.");
+    return tickCopy(tick);
+  });
+}
+
+// Puts a deleted tick back from its copy (checked again, like any input).
+export async function restoreDeletedTick(input: unknown): Promise<void> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  const copy = asObject(input);
+  const fields = cleanTickFields(copy);
+  await asCurrentUser(async (tx, userId) => {
+    const task = await findOwnedTask(tx, userId, copy.taskId as string);
+    if (fields.id && (await tx.taskCompletion.findFirst({ where: { id: fields.id }, select: { id: true } }))) {
+      throw new TaskError("It's already back.");
+    }
+    await tx.taskCompletion.create({ data: { ...fields, taskId: task.id } });
+  });
+}
+
+function tickCopy(tick: {
+  id: string;
+  taskId: string;
+  completedOn: Date;
+  previousDueDate: Date | null;
+  stepsDone: string[];
+  createdAt: Date;
+}): DeletedTick {
+  return {
+    id: tick.id,
+    taskId: tick.taskId,
+    completedOn: dateFromDb(tick.completedOn),
+    previousDueDate: tick.previousDueDate ? dateFromDb(tick.previousDueDate) : null,
+    stepsDone: tick.stepsDone,
+    createdAt: tick.createdAt.toISOString(),
+  };
+}
+
+// A tick's fields from a copy sent back by the browser, checked.
+function cleanTickFields(value: Record<string, unknown>) {
+  const completedOn = cleanDate(value.completedOn);
+  if (!completedOn) throw new TaskError("That can't be undone.");
+  const previousDueDate = cleanDate(value.previousDueDate);
+  const stepsDone = Array.isArray(value.stepsDone) ? value.stepsDone.filter(isUuid).slice(0, MAX_STEPS) : [];
+  return {
+    ...(isUuid(value.id) ? { id: value.id } : {}),
+    completedOn: dateToDb(completedOn),
+    previousDueDate: previousDueDate ? dateToDb(previousDueDate) : null,
+    stepsDone,
+    createdAt: cleanMoment(value.createdAt) ?? new Date(),
+  };
+}
+
+// An ISO timestamp from a copy, or null if it isn't one.
+function cleanMoment(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+}
+
 // ─── Steps ───────────────────────────────────────────────────────────────────
 // A step belongs to a task, so "is this yours?" is checked through its task.
 
