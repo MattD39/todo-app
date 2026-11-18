@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { applyChatChanges } from "@/app/chat-actions";
-import type { ChangeResult, ChatChange } from "@/lib/chat-changes";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { applyChatChanges, undoChatChanges } from "@/app/chat-actions";
+import type { ChangeResult, ChatChange, UndoResult } from "@/lib/chat-changes";
 import { problemMessage } from "./api-problem";
 import { ConfirmDialog } from "./confirm-dialog";
 import { input } from "./form-styles";
@@ -36,8 +36,11 @@ type ChatMessage = {
   stopped?: boolean;
   changes?: ChatChange[]; // changes Claude queued with this reply (not saved by Claude)
   saving?: boolean;
-  results?: ChangeResult[]; // how saving them went: the only thing that says ✓ done
+  results?: ShownResult[]; // how saving them went: the only thing that says ✓ done
 };
+
+// A saved change as shown in the chat, plus what happened when you pressed Undo.
+type ShownResult = ChangeResult & { undone?: boolean; undoError?: string };
 
 // Splits what the server sent into Claude's text and the change details.
 function splitReply(raw: string): { text: string; changes?: ChatChange[] } {
@@ -102,7 +105,9 @@ export function Chat() {
   // (the server has no sessionStorage, so it draws an empty chat first).
   const saved = useSyncExternalStore(noSubscribe, readSaved, () => null);
   const [changed, setChanged] = useState<ChatMessage[] | null>(null);
-  const messages = changed ?? parseSaved(saved);
+  // Parsed once per saved value, so each message stays the same object between redraws.
+  const savedMessages = useMemo(() => parseSaved(saved), [saved]);
+  const messages = changed ?? savedMessages;
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -112,6 +117,12 @@ export function Chat() {
   const [retryReady, setRetryReady] = useState(true);
   const [editingStopped, setEditingStopped] = useState(false); // the box holds a stopped message being edited
   const inputRef = useRef<HTMLInputElement>(null);
+  const [undoing, setUndoing] = useState(false); // an Undo is being saved
+  // The chat as it is right now, for code that finishes after an await.
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  });
   const [error, setError] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -143,7 +154,7 @@ export function Chat() {
   // so that stopped exchange is taken out of the chat first.
   async function send(text: string, { replaceStopped = false } = {}) {
     const message = text.trim();
-    if (!message || sending) return;
+    if (!message || sending || undoing) return;
     setEditingStopped(false);
 
     const base = replaceStopped && stoppedMessage !== null ? messages.slice(0, -2) : messages;
@@ -231,6 +242,42 @@ export function Chat() {
     }
   }
 
+  // Undoes some of the changes saved with the reply at `at` (one Undo button,
+  // or all of them for Undo all). The newest change is undone first.
+  async function undo(at: number, which: number[]) {
+    const message = messages[at];
+    const results = message?.results;
+    if (!results || undoing || sending) return;
+    const picked = which.filter((i) => results[i]?.ok && !results[i].undone).reverse();
+    if (picked.length === 0) return;
+
+    setUndoing(true);
+    const failAll = (error: string) => picked.map((): UndoResult => ({ ok: false, error }));
+    let outcome: UndoResult[];
+    try {
+      const undos = picked.map((i) => {
+        const r = results[i];
+        return r.ok ? r.undo : null;
+      });
+      const response = await undoChatChanges(undos);
+      outcome = response.results ?? failAll(response.error ?? "Nothing was undone.");
+    } catch {
+      outcome = failAll("Couldn't reach the app, so nothing was undone. Check your connection.");
+    }
+    setUndoing(false);
+
+    // Only if that reply is still there (the chat wasn't cleared meanwhile).
+    const latest = messagesRef.current;
+    if (latest[at]?.results !== results) return;
+    const updated = results.map((r, i): ShownResult => {
+      const n = picked.indexOf(i);
+      if (n === -1) return r;
+      const o = outcome[n];
+      return o.ok ? { ...r, undone: true, undoError: undefined } : { ...r, undoError: o.error };
+    });
+    update(latest.map((m, i) => (i === at ? { ...m, results: updated } : m)));
+  }
+
   function stop() {
     abortRef.current?.abort();
   }
@@ -285,7 +332,9 @@ export function Chat() {
                 {m.stopped && (
                   <span className="text-muted">{m.text ? " (stopped, nothing was changed)" : "Stopped. Nothing was changed."}</span>
                 )}
-                {m.changes && <ChangesNote message={m} />}
+                {m.changes && (
+                  <ChangesNote message={m} busy={sending || undoing} onUndo={(which) => undo(i, which)} />
+                )}
               </div>
             );
           })}
@@ -431,23 +480,61 @@ async function saveChanges(changes: ChatChange[]): Promise<ChangeResult[]> {
 }
 
 // Claude's changes under its reply. Only a ✓ line means a change was saved;
-// Claude's own words never claim that. (Plain for now: Undo buttons come next.)
-function ChangesNote({ message }: { message: ChatMessage }) {
+// Claude's own words never claim that. Each saved change has its own Undo,
+// plus Undo all when one message made more than one change.
+function ChangesNote({
+  message,
+  busy,
+  onUndo,
+}: {
+  message: ChatMessage;
+  busy: boolean; // a reply or another Undo is in progress
+  onUndo: (which: number[]) => void;
+}) {
   const { changes = [], results, saving } = message;
+  // Changes that were saved and haven't been undone yet.
+  const undoable = (results ?? []).flatMap((r, i) => (r.ok && !r.undone ? [i] : []));
+  const smallButton =
+    "flex-none rounded-full border border-line bg-bg px-3 py-1 text-[0.85rem] font-bold text-ink disabled:opacity-50";
   return (
-    <div className="mt-2 border-t border-line pt-2 text-[0.92rem]">
+    <div className="mt-2 border-t border-line pt-2 text-[0.92rem] whitespace-normal">
       {saving ? (
         <p className="text-muted">Saving…</p>
       ) : results ? (
-        results.map((r, i) =>
-          r.ok ? (
-            <p key={i}>✓ {r.summary}</p>
-          ) : (
-            <p key={i} className="font-bold text-high">
-              ✗ Not saved: {r.summary}. {r.error}
-            </p>
-          ),
-        )
+        <>
+          <ul className="flex flex-col gap-1.5">
+            {results.map((r, i) => (
+              <li key={i}>
+                {r.ok ? (
+                  <div className="flex items-center justify-between gap-2">
+                    {r.undone ? (
+                      <span className="text-muted">↩ Undone: {r.summary}</span>
+                    ) : (
+                      <>
+                        <span>✓ {r.summary}</span>
+                        <button type="button" disabled={busy} onClick={() => onUndo([i])} className={smallButton}>
+                          Undo
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <span className="font-bold text-high">
+                    ✗ Not saved: {r.summary}. {r.error}
+                  </span>
+                )}
+                {r.undoError && <p className="text-[0.85rem] font-bold text-high">Couldn&apos;t undo: {r.undoError}</p>}
+              </li>
+            ))}
+          </ul>
+          {undoable.length >= 2 && (
+            <div className="mt-2 flex justify-end">
+              <button type="button" disabled={busy} onClick={() => onUndo(undoable)} className={smallButton}>
+                Undo all
+              </button>
+            </div>
+          )}
+        </>
       ) : (
         // Saving never finished (e.g. the app was closed meanwhile): it may or may not have worked.
         changes.map((c, i) => (

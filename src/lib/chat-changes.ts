@@ -3,12 +3,14 @@ import { unstable_rethrow } from "next/navigation";
 import { formatDay, formatTime, isValidDay } from "./dates";
 import {
   createTask,
+  deleteTask,
   getTask,
   MAX_CATEGORY,
   MAX_NOTES,
   MAX_TITLE,
   setTaskDone,
   TaskError,
+  undoCompletion,
   updateTask,
   type TaskChanges,
   type TaskDTO,
@@ -203,6 +205,59 @@ async function applyOne(change: ChatChange): Promise<ChangeResult> {
     console.error("Chat change failed", error);
     return { ok: false, summary, error: "Something went wrong saving this change." };
   }
+}
+
+// ─── Undo ────────────────────────────────────────────────────────────────────
+
+export type UndoResult = { ok: true } | { ok: false; error: string };
+
+// The Undo details sent back by the browser, checked again. Null if anything is off.
+export function cleanUndos(input: unknown): ChangeUndo[] | null {
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_CHANGES_PER_MESSAGE) return null;
+  const undos: ChangeUndo[] = [];
+  for (const item of input) {
+    const value = asRecord(item);
+    if (value.kind === "remove-added" && typeof value.taskId === "string") {
+      undos.push({ kind: "remove-added", taskId: value.taskId });
+    } else if (value.kind === "restore" && typeof value.taskId === "string") {
+      const changes = cleanFields(asRecord(value.changes));
+      if (typeof changes === "string" || Object.keys(changes).length === 0) return null;
+      undos.push({ kind: "restore", taskId: value.taskId, changes });
+    } else if (value.kind === "untick" && typeof value.taskId === "string") {
+      undos.push({ kind: "untick", taskId: value.taskId });
+    } else if (value.kind === "undo-tick" && typeof value.completionId === "string") {
+      undos.push({ kind: "undo-tick", completionId: value.completionId });
+    } else {
+      return null;
+    }
+  }
+  return undos;
+}
+
+// Puts changes back, one by one, in the order given (Undo all sends the
+// newest first, so a task added and then changed is changed back before it's
+// removed). One failing doesn't stop the others. Goes through tasks.ts like
+// everything else: only your own tasks.
+export async function undoChanges(undos: ChangeUndo[]): Promise<UndoResult[]> {
+  const results: UndoResult[] = [];
+  for (const undo of undos) {
+    try {
+      if (undo.kind === "remove-added") await deleteTask(undo.taskId);
+      else if (undo.kind === "restore") await updateTask(undo.taskId, undo.changes);
+      else if (undo.kind === "untick") await setTaskDone(undo.taskId, false);
+      else await undoCompletion(undo.completionId);
+      results.push({ ok: true });
+    } catch (error) {
+      unstable_rethrow(error); // an expired login redirects to /login
+      if (error instanceof TaskError) {
+        results.push({ ok: false, error: error.message });
+      } else {
+        console.error("Chat undo failed", error);
+        results.push({ ok: false, error: "Something went wrong undoing this." });
+      }
+    }
+  }
+  return results;
 }
 
 function asRecord(input: unknown): Record<string, unknown> {

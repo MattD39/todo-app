@@ -3,7 +3,14 @@
 import { refresh } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
-import { applyChanges, cleanChanges, type ChangeResult } from "@/lib/chat-changes";
+import {
+  applyChanges,
+  cleanChanges,
+  cleanUndos,
+  undoChanges,
+  type ChangeResult,
+  type UndoResult,
+} from "@/lib/chat-changes";
 
 // Saves the changes Claude queued in the Chat tab, straight after its reply.
 //
@@ -24,5 +31,22 @@ export async function applyChatChanges(input: unknown): Promise<{ error: string 
     unstable_rethrow(error);
     console.error("Chat changes failed", error);
     return { error: "Couldn't save the changes. Check your connection and try again." };
+  }
+}
+
+// Undoes changes Claude made in the Chat tab (one Undo button, or Undo all).
+// Same rules as above: checked again, saved through src/lib/tasks.ts.
+export async function undoChatChanges(input: unknown): Promise<{ error: string | null; results?: UndoResult[] }> {
+  try {
+    await getCurrentUser(); // signed-out visitors are turned away first
+    const undos = cleanUndos(input);
+    if (!undos) return { error: "That couldn't be undone." };
+    const results = await undoChanges(undos);
+    if (results.some((r) => r.ok)) refresh(); // the other tabs show the list as it is now
+    return { error: null, results };
+  } catch (error) {
+    unstable_rethrow(error); // an expired login redirects to /login
+    console.error("Chat undo failed", error);
+    return { error: "Couldn't undo. Check your connection and try again." };
   }
 }
