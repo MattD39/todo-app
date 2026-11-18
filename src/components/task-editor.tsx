@@ -7,10 +7,12 @@ import {
   useActionState,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useTransition,
 } from "react";
+import { flushSync } from "react-dom";
 import type { TaskDTO } from "@/lib/tasks";
 import { isValidDay } from "@/lib/dates";
 import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
@@ -151,7 +153,40 @@ export function OpenTaskButton({
   );
 }
 
+// Opens a new task with the cursor already in the title box and the keyboard
+// up. iPhone Safari only opens the keyboard if a text box is focused during
+// the tap itself, not a moment later, so everything here happens inside the
+// tap:
+//   1. focus an invisible text box that's always on the page. That alone
+//      makes the iPhone open its keyboard (the backup plan);
+//   2. flushSync draws and opens the sheet right now instead of a moment
+//      later, and the sheet focuses its title box as it opens (see TaskSheet).
+// Moving focus from one text box to another keeps the keyboard up.
 function AddTaskButton({ onClick }: { onClick: () => void }) {
+  const keyboardOpener = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input
+        ref={keyboardOpener}
+        data-keyboard-opener=""
+        aria-hidden
+        tabIndex={-1}
+        autoComplete="off"
+        // Invisible, but not display:none (that couldn't take focus). 16px text
+        // stops the iPhone zooming in on it.
+        className="pointer-events-none fixed top-0 left-0 size-px text-base opacity-0"
+      />
+      <AddTaskFab
+        onClick={() => {
+          keyboardOpener.current?.focus({ preventScroll: true });
+          flushSync(onClick);
+        }}
+      />
+    </>
+  );
+}
+
+function AddTaskFab({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
@@ -215,9 +250,16 @@ function TaskSheet({
 
   // <dialog>'s showModal() gives us, for free: the dimmed background, Escape
   // to close, and keyboard focus kept inside the sheet.
-  useEffect(() => {
+  // A layout effect, so when Add task opens the sheet with flushSync this all
+  // happens inside the tap; then a new task's title box can be focused with
+  // the keyboard opening on the iPhone too. An existing task focuses nothing
+  // you type in, so no keyboard pops up.
+  const titleRef = useRef<HTMLInputElement>(null);
+  const isNew = !task;
+  useLayoutEffect(() => {
     dialogRef.current?.showModal();
-  }, []);
+    if (isNew) titleRef.current?.focus();
+  }, [isNew]);
   useFitVisibleScreen(dialogRef);
   const backdropClose = useBackdropClose(onClose);
 
@@ -225,7 +267,14 @@ function TaskSheet({
     <dialog
       ref={dialogRef}
       aria-labelledby="sheet-title"
-      onClose={onClose}
+      onClose={() => {
+        // Closing with Escape hands focus back to whatever had it before the
+        // sheet opened: for Add task, the invisible keyboard opener. Let go of
+        // it so typing doesn't vanish into it (and no keyboard pops up).
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.dataset.keyboardOpener !== undefined) active.blur();
+        onClose();
+      }}
       // A tap on the dimmed area (the dialog itself, outside the panel) closes it.
       {...backdropClose}
       className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
@@ -297,8 +346,8 @@ function TaskSheet({
               maxLength={200}
               defaultValue={task?.title}
               placeholder="e.g. Call the bank"
+              ref={titleRef}
               autoComplete="off"
-              autoFocus={!task}
               enterKeyHint="done"
               className={input}
             />
