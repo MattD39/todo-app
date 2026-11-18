@@ -107,6 +107,11 @@ export function Chat() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [savingNow, setSavingNow] = useState(false); // Claude's changes are being saved: too late to stop
+  // Try again / Edit after a stopped reply. Off for a moment right after Stop,
+  // so fast clicking can't hit them by accident.
+  const [retryReady, setRetryReady] = useState(true);
+  const [editingStopped, setEditingStopped] = useState(false); // the box holds a stopped message being edited
+  const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -129,11 +134,20 @@ export function Chat() {
     save(next);
   }
 
-  async function send(text: string) {
+  // The message you stopped, if the chat ends with a stopped reply (for Try again / Edit).
+  const last = messages.at(-1);
+  const stoppedMessage =
+    last?.role === "assistant" && last.stopped && messages.at(-2)?.role === "user" ? messages.at(-2)!.text : null;
+
+  // `replaceStopped`: the message replaces a stopped one (Try again / Edit),
+  // so that stopped exchange is taken out of the chat first.
+  async function send(text: string, { replaceStopped = false } = {}) {
     const message = text.trim();
     if (!message || sending) return;
+    setEditingStopped(false);
 
-    const history: ChatMessage[] = [...messages, { role: "user", text: message }];
+    const base = replaceStopped && stoppedMessage !== null ? messages.slice(0, -2) : messages;
+    const history: ChatMessage[] = [...base, { role: "user", text: message }];
     update([...history, { role: "assistant", text: "" }]);
     setDraft("");
     setError(null);
@@ -143,7 +157,7 @@ export function Chat() {
     // put it back in the box, so pressing Send again retries it. (Not after
     // Stop: Send sits where Stop was, so a second click would send it again.)
     const giveBack = (problem: string) => {
-      update(messages);
+      update(base);
       setDraft(message);
       setError(problem);
     };
@@ -152,7 +166,11 @@ export function Chat() {
     abortRef.current = abort;
     let reply = "";
     // Stopped: keep your message and what Claude wrote so far; nothing is saved.
-    const markStopped = () => update([...history, { role: "assistant", text: splitReply(reply).text, stopped: true }]);
+    const markStopped = () => {
+      update([...history, { role: "assistant", text: splitReply(reply).text, stopped: true }]);
+      setRetryReady(false);
+      setTimeout(() => setRetryReady(true), 700);
+    };
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -271,6 +289,34 @@ export function Chat() {
               </div>
             );
           })}
+
+          {/* Under the stopped reply, well away from the Stop button (which sits in
+              the bar at the bottom and covers the page there). The message only
+              goes back in the box when you choose Edit. */}
+          {stoppedMessage !== null && !sending && (
+            <div className="flex gap-2 self-start">
+              <button
+                type="button"
+                disabled={!retryReady}
+                onClick={() => send(stoppedMessage, { replaceStopped: true })}
+                className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                disabled={!retryReady}
+                onClick={() => {
+                  setDraft(stoppedMessage);
+                  setEditingStopped(true);
+                  inputRef.current?.focus();
+                }}
+                className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
+              >
+                Edit
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -286,7 +332,7 @@ export function Chat() {
         ref={composerRef}
         onSubmit={(e) => {
           e.preventDefault();
-          send(draft);
+          send(draft, { replaceStopped: editingStopped });
         }}
         className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] z-[6] border-t border-line bg-bg"
       >
@@ -320,6 +366,7 @@ export function Chat() {
           </label>
           <input
             id="chat-message"
+            ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={MAX_MESSAGE}
