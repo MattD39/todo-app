@@ -76,7 +76,12 @@ export type ScreenData = Awaited<ReturnType<typeof loadScreen>>;
 export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; children: React.ReactNode }) {
   const stats = buildStats(data.open, data.now);
   return (
-    <TaskEditorProvider categories={data.categories} defaultCategory={data.category} today={data.now.today}>
+    <TaskEditorProvider
+      categories={data.categories}
+      defaultCategory={data.category}
+      today={data.now.today}
+      showAddButton={tab !== "chat"} // it would sit on top of the chat's Send button
+    >
       <TimeZoneSync serverTimeZone={data.timeZone} />
       <RefreshOnReturn />
       <ScreenHeader

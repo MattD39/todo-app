@@ -49,11 +49,13 @@ export function TaskEditorProvider({
   categories,
   defaultCategory,
   today,
+  showAddButton = true,
   children,
 }: {
   categories: string[];
   defaultCategory: string | null; // the filter chip that's on, if any — new tasks start in it
   today: string; // in the user's time zone
+  showAddButton?: boolean; // the floating "Add task" button (off on the Chat tab, where it would cover Send)
   children: React.ReactNode;
 }) {
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -85,7 +87,7 @@ export function TaskEditorProvider({
     <OpenEditor value={open}>
       <ShowToast value={toast}>
         {children}
-        <AddTaskButton onClick={() => open({ mode: "new", dueDate: calendarDay(today) })} />
+        {showAddButton && <AddTaskButton onClick={() => open({ mode: "new", dueDate: calendarDay(today) })} />}
         {editing && (
           <TaskSheet
             key={openCount}

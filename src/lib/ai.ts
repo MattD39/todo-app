@@ -119,7 +119,7 @@ const CHAT_PROMPT =
   "clearer than a date.\n\n" +
   "In this chat you can only read the task list. You can't add, change, tick off or delete tasks, set " +
   "reminders or look anything up, so never say you did or will. If they ask for a change, say they can " +
-  "make it themselves by tapping the task (or the + button to add one). If something isn't in the snapshot " +
+  "make it themselves by tapping the task on another tab (or Add task on the Today tab to add one). If something isn't in the snapshot " +
   "(like tasks finished more than 7 days ago), say you can't see it rather than guessing. If a message has " +
   "nothing to do with their tasks, answer it briefly anyway.\n\n" +
   USER_DATA_RULE;
