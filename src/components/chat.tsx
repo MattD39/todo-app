@@ -127,18 +127,20 @@ export function Chat() {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const composerRef = useRef<HTMLFormElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
 
   useKeepAboveKeyboard(composerRef);
 
   // Leaving the Chat tab mid-reply stops Claude (what it wrote so far is kept).
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // Keep the newest message in view as the reply grows.
-  const lastText = messages.at(-1)?.text;
+  // Follow the newest message: scroll to the bottom as the reply grows, but
+  // only while you're at the bottom. Scroll up to read and it leaves you be;
+  // scroll back down (or send a message) and it follows again.
+  const followRef = useFollowBottom();
+  const lastMessage = messages.at(-1);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, lastText, error]);
+    if (followRef.current) scrollToBottom();
+  }, [followRef, messages.length, lastMessage, error]);
 
   function update(next: ChatMessage[]) {
     setChanged(next);
@@ -163,6 +165,7 @@ export function Chat() {
     setDraft("");
     setError(null);
     setSending(true);
+    followRef.current = true; // you just sent something: show the reply
 
     // On a problem before Claude wrote anything, take the message back out and
     // put it back in the box, so pressing Send again retries it. (Not after
@@ -187,7 +190,7 @@ export function Chat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: abort.signal,
-        body: JSON.stringify({ messages: history.map(({ role, text }) => ({ role, text })) }),
+        body: JSON.stringify({ messages: history.map(toTurn) }),
       });
 
       if (response.redirected || !response.ok || !response.body) {
@@ -374,7 +377,6 @@ export function Chat() {
           {error}
         </p>
       )}
-      <div ref={endRef} className="h-px" />
 
       {/* Sits just above the tab bar (or above the keyboard while typing). */}
       <form
@@ -467,6 +469,21 @@ export function Chat() {
   );
 }
 
+// One message as sent to the server. For Claude's replies this includes what
+// happened to their changes (saved, undone, failed) and whether you stopped
+// it, so Claude knows instead of guessing.
+function toTurn(m: ChatMessage) {
+  if (m.role === "user") return { role: m.role, text: m.text };
+  const changes = m.results
+    ? m.results.map((r) =>
+        r.ok
+          ? { summary: r.summary, status: r.undone ? "undone" : "saved" }
+          : { summary: r.summary, status: "failed", error: r.error },
+      )
+    : m.changes?.map((c) => ({ summary: c.summary, status: "unknown" }));
+  return { role: m.role, text: m.text, ...(changes ? { changes } : {}), ...(m.stopped ? { stopped: true } : {}) };
+}
+
 // Saves Claude's changes and says how each one went. Never throws: a
 // problem becomes a ✗ result for every change.
 async function saveChanges(changes: ChatChange[]): Promise<ChangeResult[]> {
@@ -545,6 +562,33 @@ function ChangesNote({
       )}
     </div>
   );
+}
+
+// The very bottom of the page. The page has room at the bottom for the
+// message bar and tab bar, so the newest message ends up just above them
+// (not hidden behind them).
+function scrollToBottom() {
+  window.scrollTo({ top: document.documentElement.scrollHeight });
+}
+
+// Whether the chat should follow new text. Becomes false when you scroll up,
+// true again when you're back near the bottom. (A reply growing doesn't move
+// the page, so only real scrolling changes it.)
+function useFollowBottom() {
+  const follow = useRef(true);
+  useEffect(() => {
+    let lastY = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      const nearBottom = window.innerHeight + y >= document.documentElement.scrollHeight - 80;
+      if (nearBottom) follow.current = true;
+      else if (y < lastY) follow.current = false; // you scrolled up
+      lastY = y;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  return follow;
 }
 
 // On iPhone the keyboard slides over the bottom of the page without making it

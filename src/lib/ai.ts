@@ -11,7 +11,7 @@ import {
   type ChatChange,
 } from "./chat-changes";
 import { addDays, dayOf, formatDay, formatTime, isOverdue, relDay, type Now } from "./dates";
-import { MAX_NOTES, MAX_TITLE, type HistoryDTO, type TaskDTO } from "./tasks";
+import { MAX_NOTES, MAX_TITLE, type HistoryDTO, type TaskChanges, type TaskDTO } from "./tasks";
 
 // The app's Claude features. Each one builds a prompt from the task, asks
 // Claude, and checks the answer before handing it back. Nothing here reads or
@@ -105,7 +105,20 @@ export async function* askAboutTask(
 }
 
 // One message in the Chat tab's conversation.
-export type ChatTurn = { role: "user" | "assistant"; text: string };
+export type ChatTurn = {
+  role: "user" | "assistant";
+  text: string;
+  // Claude's replies only: what happened to the changes it queued, as the
+  // chat saw it, and whether you pressed Stop during the reply.
+  changes?: ChangeReport[];
+  stopped?: boolean;
+};
+
+export type ChangeReport = {
+  summary: string;
+  status: "saved" | "undone" | "failed" | "unknown";
+  error?: string;
+};
 
 // What Claude can see in the Chat tab: a snapshot of the task list, loaded by
 // the server (src/lib/tasks.ts) for each message.
@@ -140,6 +153,9 @@ const CHAT_PROMPT =
   "a change is done, saved or added. After using the tools, write one short sentence in the future tense, " +
   "like \"I'll add it for Friday.\" or \"I'll move both to Monday.\" The app lists the changes itself, so " +
   "don't repeat them. If a tool says a change wasn't queued, fix it or tell the user.\n\n" +
+  "Before a message, the app may add a note saying what happened to your earlier changes: saved, undone " +
+  "by the user, not saved (with the reason), or stopped. Trust that note over your own earlier words and " +
+  'say so plainly, e.g. "You undid that, so it\'s still due Thursday."\n\n' +
   "If something isn't in the snapshot (like tasks finished more than 7 days ago), say you can't see it " +
   "rather than guessing. If a message has nothing to do with their tasks, answer it briefly anyway.\n\n" +
   USER_DATA_RULE;
@@ -154,6 +170,8 @@ const REPEAT = {
 };
 const DUE_DATE = 'Due date as "YYYY-MM-DD", or null for no due date.';
 const DUE_TIME = 'Due time as 24-hour "HH:MM", or null for no time. A time needs a due date.';
+// Fields update_task can empty (only by naming them in `clear`).
+const CLEARABLE = ["due_date", "due_time", "category", "repeat"];
 
 const CHAT_TOOLS: Anthropic.Tool[] = [
   {
@@ -177,20 +195,30 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "update_task",
+    // No nulls here on purpose: a field left out stays as it is, and emptying
+    // a field must be asked for by name in `clear`. (When null meant "empty
+    // it", Claude sometimes sent null for fields nobody mentioned, e.g.
+    // repeat: null, which would quietly stop a task repeating.)
     description:
-      "Queue a change to one open task. Include only the fields that change; null clears a field " +
-      "(e.g. due_date null = no due date).",
+      "Queue a change to one open task. Send ONLY the fields the user asked to change; every field you " +
+      "leave out stays exactly as it is. To empty a field (no due date, no time, no category, stop " +
+      "repeating), list it in clear, and only when the user asked for that.",
     strict: true,
     input_schema: {
       type: "object",
       properties: {
         task: { type: "string", description: "The task's label from the newest snapshot, like T3." },
         title: { type: "string", description: "New title." },
-        due_date: nullableString(DUE_DATE),
-        due_time: nullableString(DUE_TIME),
+        due_date: { type: "string", description: 'New due date as "YYYY-MM-DD".' },
+        due_time: { type: "string", description: 'New due time as 24-hour "HH:MM".' },
         priority: PRIORITY,
-        category: nullableString("New category name, or null for none."),
-        repeat: REPEAT,
+        category: { type: "string", description: "New category name." },
+        repeat: { type: "string", enum: ["daily", "weekly", "monthly"], description: "New repeat." },
+        clear: {
+          type: "array",
+          items: { type: "string", enum: CLEARABLE },
+          description: "Fields the user asked to empty. Leave out otherwise.",
+        },
       },
       required: ["task"],
       additionalProperties: false,
@@ -228,12 +256,21 @@ export async function* chatAboutTasks(
   const { now } = snapshot;
   const labels = taskLabels(snapshot.open);
   const header = `Right now it's ${formatDay(now.today, { withYear: true })} (${now.today}), ${formatTime(now.time)}.`;
-  const messages: Anthropic.MessageParam[] = turns.map((turn, i) =>
-    i === turns.length - 1
+  const messages: Anthropic.MessageParam[] = turns.map((turn, i) => {
+    if (turn.role === "assistant") {
+      return { role: "assistant", content: turn.text || "(I didn't write a message, only queued changes.)" };
+    }
+    // What happened after Claude's previous reply goes before your message.
+    const note = describeOutcome(turns[i - 1]);
+    const before = note ? `${note}\n\n` : "";
+    return i === turns.length - 1
       ? // The message is the user's own words, so it sits outside <user_data>.
-        { role: "user", content: `${header}\n\n${asUserData(describeTaskList(snapshot))}\n\nMy message: ${turn.text}` }
-      : { role: turn.role, content: turn.text },
-  );
+        {
+          role: "user",
+          content: `${before}${header}\n\n${asUserData(describeTaskList(snapshot))}\n\nMy message: ${turn.text}`,
+        }
+      : { role: "user", content: `${before}${turn.text}` };
+  });
 
   let wroteSomething = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -274,6 +311,26 @@ export async function* chatAboutTasks(
   }
 }
 
+// A note from the app about what happened after one of Claude's replies, so
+// Claude knows (instead of guessing) whether its changes were saved, undone
+// by you, or failed. Empty if there's nothing to say.
+function describeOutcome(reply: ChatTurn | undefined): string {
+  if (!reply || reply.role !== "assistant") return "";
+  if (reply.stopped) {
+    return "Note from the app (not written by the user): the user pressed Stop during your previous reply, so none of its changes were saved.";
+  }
+  if (!reply.changes?.length) return "";
+  const status: Record<ChangeReport["status"], string> = {
+    saved: "saved",
+    undone: "saved, then the user pressed Undo, so it's back the way it was",
+    failed: "not saved",
+    unknown: "unknown (the app was closed while saving; check the snapshot)",
+  };
+  const lines = reply.changes.map((c) => `- ${c.summary}: ${status[c.status]}${c.error ? ` (${c.error})` : ""}`);
+  const intro = "Note from the app (not written by the user): what happened to the changes from your previous reply:";
+  return `${intro}\n${asUserData(lines.join("\n"))}`;
+}
+
 // "T1", "T2", … for the open tasks in the snapshot (same order as listed).
 function taskLabels(open: TaskDTO[]): Map<string, TaskDTO> {
   return new Map(open.slice(0, CHAT_MAX_OPEN).map((task, i) => [`T${i + 1}`, task]));
@@ -284,7 +341,7 @@ type Queued = { ok: boolean; message: string };
 // Checks one tool call and, if it makes sense, adds it to the queue. The
 // answer goes back to Claude. tasks.ts checks everything again when the
 // change is actually made.
-function queueChange(call: Anthropic.ToolUseBlock, labels: Map<string, TaskDTO>, queue: ChatChange[]): Queued {
+export function queueChange(call: Anthropic.ToolUseBlock, labels: Map<string, TaskDTO>, queue: ChatChange[]): Queued {
   if (queue.length >= MAX_CHANGES_PER_MESSAGE) {
     return { ok: false, message: `Not queued: one message can make at most ${MAX_CHANGES_PER_MESSAGE} changes.` };
   }
@@ -300,18 +357,16 @@ function queueChange(call: Anthropic.ToolUseBlock, labels: Map<string, TaskDTO>,
     return { ok: true, message: `Queued: ${change.summary}. The app saves it after your reply. Don't queue it again.` };
   };
 
-  // The fields add_task and update_task both take (tool names → the app's names).
-  const fields = cleanFields({
-    title: input.title,
-    dueDate: input.due_date,
-    dueTime: input.due_time,
-    priority: input.priority,
-    category: input.category,
-    repeat: input.repeat,
-  });
-  if (typeof fields === "string") return fail(fields);
-
   if (call.name === "add_task") {
+    const fields = cleanFields({
+      title: input.title,
+      dueDate: input.due_date,
+      dueTime: input.due_time,
+      priority: input.priority,
+      category: input.category,
+      repeat: input.repeat,
+    });
+    if (typeof fields === "string") return fail(fields);
     if (!fields.title) return fail("a new task needs a title.");
     if (fields.dueTime && !fields.dueDate) return fail("a due time needs a due date.");
     const notes = typeof input.notes === "string" ? input.notes.trim().slice(0, MAX_NOTES) : "";
@@ -323,10 +378,19 @@ function queueChange(call: Anthropic.ToolUseBlock, labels: Map<string, TaskDTO>,
   if (!task) return fail(`there's no open task labelled ${JSON.stringify(input.task)} in the newest snapshot.`);
 
   if (call.name === "update_task") {
-    if (Object.keys(fields).length === 0) return fail("say at least one thing to change.");
-    const dueDate = fields.dueDate !== undefined ? fields.dueDate : task.dueDate;
-    if (fields.dueTime && !dueDate) return fail("a due time needs a due date.");
-    return enqueue({ kind: "update", taskId: task.id, changes: fields, summary: describeUpdate(task, fields) });
+    const changes = updateFields(input, task);
+    if (typeof changes === "string") return fail(changes);
+    const dueDate = changes.dueDate !== undefined ? changes.dueDate : task.dueDate;
+    if (changes.dueTime && !dueDate) return fail("a due time needs a due date.");
+    // Two changes to the same task in one message become one (one ✓ line, one Undo).
+    const earlier = queue.findIndex((c) => c.kind === "update" && c.taskId === task.id);
+    if (earlier !== -1) {
+      const before = queue[earlier];
+      const merged = { ...(before.kind === "update" ? before.changes : {}), ...changes };
+      queue[earlier] = { kind: "update", taskId: task.id, changes: merged, summary: describeUpdate(task, merged) };
+      return { ok: true, message: `Queued, together with your earlier change to this task: ${queue[earlier].summary}.` };
+    }
+    return enqueue({ kind: "update", taskId: task.id, changes, summary: describeUpdate(task, changes) });
   }
 
   if (call.name === "complete_task") {
@@ -334,6 +398,49 @@ function queueChange(call: Anthropic.ToolUseBlock, labels: Map<string, TaskDTO>,
   }
 
   return fail(`there's no tool called ${call.name}.`);
+}
+
+// The changes an update_task call asks for, as the app's field names. Only
+// fields with a real value count; a field is emptied only when it's named in
+// `clear` (a stray null is ignored, never treated as "empty it"). Fields that
+// already have that value are dropped, so the ✓ line only lists real changes.
+// Exported for scripts/check-chat-tools.mts.
+export function updateFields(input: Record<string, unknown>, task: TaskDTO): TaskChanges | string {
+  const given = (key: string) => (input[key] === null || input[key] === "" ? undefined : input[key]);
+  const raw: Record<string, unknown> = {
+    title: given("title"),
+    dueDate: given("due_date"),
+    dueTime: given("due_time"),
+    priority: given("priority"),
+    category: given("category"),
+    repeat: given("repeat"),
+  };
+  const clear = Array.isArray(input.clear) ? input.clear : [];
+  const names: Record<string, string> = { due_date: "dueDate", due_time: "dueTime", category: "category", repeat: "repeat" };
+  for (const field of clear) {
+    const name = names[field as string];
+    if (!name) return `${JSON.stringify(field)} can't be cleared.`;
+    if (raw[name] !== undefined) return `${field} was both given a value and listed in clear.`;
+    raw[name] = null;
+  }
+
+  const fields = cleanFields(raw);
+  if (typeof fields === "string") return fields;
+
+  const current: TaskChanges = {
+    title: task.title,
+    dueDate: task.dueDate,
+    dueTime: task.dueTime,
+    priority: task.priority,
+    category: task.category?.name ?? null,
+    repeat: task.repeat,
+  };
+  const changes: TaskChanges = {};
+  for (const [key, value] of Object.entries(fields) as [keyof TaskChanges, string | null][]) {
+    if (value !== current[key]) (changes as Record<string, string | null>)[key] = value;
+  }
+  if (Object.keys(changes).length === 0) return "nothing would change: the task already looks like that.";
+  return changes;
 }
 
 // Asks Claude and hands back its answer a piece at a time as it's written.

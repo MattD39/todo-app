@@ -1,7 +1,8 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { unstable_rethrow } from "next/navigation";
-import { ClaudeError, type ChatTurn, type TaskForClaude } from "./ai";
+import { ClaudeError, type ChangeReport, type ChatTurn, type TaskForClaude } from "./ai";
+import { MAX_CHANGES_PER_MESSAGE } from "./chat-changes";
 import { MAX_CATEGORY, MAX_NOTES, MAX_STEPS, MAX_TITLE } from "./tasks";
 
 // Shared checks for everything that sends a request to Claude from the browser
@@ -26,14 +27,30 @@ export function cleanChat(input: unknown): ChatTurn[] {
     const value = asRecord(item);
     const role = value.role === "user" || value.role === "assistant" ? value.role : null;
     const body = role ? text(value.text, role === "user" ? MAX_CHAT_MESSAGE : MAX_CHAT_REPLY) : "";
-    if (!role || !body) continue;
+    const changes = role === "assistant" ? cleanReports(value.changes) : [];
+    const stopped = role === "assistant" && value.stopped === true;
+    // (A reply with no words still counts if it made changes or was stopped.)
+    if (!role || (!body && changes.length === 0 && !stopped)) continue;
     // Two in a row from the same side (e.g. after a failed answer): keep the newer one.
     if (turns.at(-1)?.role === role) turns.pop();
-    turns.push({ role, text: body });
+    turns.push({ role, text: body, ...(changes.length ? { changes } : {}), ...(stopped ? { stopped } : {}) });
   }
   while (turns.length > MAX_CHAT_TURNS) turns.shift();
   while (turns[0]?.role === "assistant") turns.shift();
   return turns.at(-1)?.role === "user" ? turns : [];
+}
+
+// What the chat says happened to a reply's changes. Odd entries are dropped.
+function cleanReports(input: unknown): ChangeReport[] {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, MAX_CHANGES_PER_MESSAGE).flatMap((item): ChangeReport[] => {
+    const value = asRecord(item);
+    const summary = text(value.summary, 300);
+    const status = oneOf(value.status, ["saved", "undone", "failed", "unknown"]) as ChangeReport["status"] | "";
+    if (!summary || !status) return [];
+    const error = text(value.error, 200);
+    return [{ summary, status, ...(error ? { error } : {}) }];
+  });
 }
 
 // ─── Streaming replies (shared by /api/ask and /api/chat) ────────────────────
