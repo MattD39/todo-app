@@ -16,6 +16,7 @@ import { isValidDay } from "@/lib/dates";
 import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
 import { dateTimeFix, fieldLabel, input, segment } from "./form-styles";
 import { StepsEditor } from "./steps-editor";
+import { useBackdropClose } from "./use-backdrop-close";
 import { useFitVisibleScreen } from "./use-fit-visible-screen";
 
 // Everything for adding and editing tasks:
@@ -155,7 +156,15 @@ function AddTaskButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className="fixed right-[calc(max(16px,env(safe-area-inset-right,0px))+4px)] bottom-[calc(64px+18px+env(safe-area-inset-bottom,0px))] z-[7] flex h-[54px] items-center gap-1.5 rounded-full bg-accent pr-5 pl-4 font-bold text-accent-ink shadow-[0_6px_18px_rgba(0,0,0,.18)]"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" className="size-[22px]" aria-hidden>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        className="size-[22px]"
+        aria-hidden
+      >
         <path d="M12 5v14M5 12h14" />
       </svg>
       Add task
@@ -193,11 +202,14 @@ function TaskSheet({
   // Tracked so the time box can be switched off when there's no date.
   const [dueDate, setDueDate] = useState(task?.dueDate ?? (editing.mode === "new" ? (editing.dueDate ?? "") : ""));
 
-  const [state, save, saving] = useActionState(async (prev: SaveTaskState, formData: FormData) => {
-    const result = await saveTask(prev, formData);
-    if (!result.error) onClose();
-    return result;
-  }, { error: null, savedAt: null });
+  const [state, save, saving] = useActionState(
+    async (prev: SaveTaskState, formData: FormData) => {
+      const result = await saveTask(prev, formData);
+      if (!result.error) onClose();
+      return result;
+    },
+    { error: null, savedAt: null },
+  );
 
   // <dialog>'s showModal() gives us, for free: the dimmed background, Escape
   // to close, and keyboard focus kept inside the sheet.
@@ -205,6 +217,7 @@ function TaskSheet({
     dialogRef.current?.showModal();
   }, []);
   useFitVisibleScreen(dialogRef);
+  const backdropClose = useBackdropClose(onClose);
 
   return (
     <dialog
@@ -212,7 +225,7 @@ function TaskSheet({
       aria-labelledby="sheet-title"
       onClose={onClose}
       // A tap on the dimmed area (the dialog itself, outside the panel) closes it.
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+      {...backdropClose}
       className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
     >
       <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">

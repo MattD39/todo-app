@@ -45,6 +45,16 @@ export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + "/"));
 
+  if (!signedIn && path.startsWith("/api/")) {
+    // The browser's code calls these, not a person, so a redirect to the login
+    // page would just look like a strange reply. Say "not signed in" instead.
+    const denied = NextResponse.json(
+      { error: "Your login has expired. Reload the page and sign in." },
+      { status: 401 },
+    );
+    response.cookies.getAll().forEach((cookie) => denied.cookies.set(cookie));
+    return denied;
+  }
   if (!signedIn && !isPublic) {
     return redirectKeepingCookies(request, response, "/login");
   }

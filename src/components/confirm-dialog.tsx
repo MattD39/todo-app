@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useBackdropClose } from "./use-backdrop-close";
 
 // A small "Are you sure?" pop-up in the app's own style (the browser's
 // built-in confirm() box looks out of place, especially on iPhone).
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const backdropClose = useBackdropClose(onCancel);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -30,7 +32,7 @@ export function ConfirmDialog({
       aria-labelledby="confirm-title"
       aria-describedby="confirm-body"
       onClose={onCancel}
-      onClick={(e) => e.target === e.currentTarget && onCancel()}
+      {...backdropClose}
       className="m-auto w-[min(360px,calc(100%-32px))] rounded-[18px] bg-bg p-0 text-ink backdrop:bg-[rgba(10,16,12,.45)]"
     >
       <div className="sheet-in p-5">

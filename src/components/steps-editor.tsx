@@ -5,6 +5,7 @@ import type { StepDTO } from "@/lib/tasks";
 import { addTaskStep, addTaskSteps, removeTaskStep, tickTaskStep } from "@/app/task-actions";
 import { suggestTaskSteps } from "@/app/ai-actions";
 import { fieldLabel, input } from "./form-styles";
+import { AskClaude } from "./ask-claude";
 
 // The "Steps" checklist inside the task editor sheet.
 //
@@ -146,125 +147,126 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
   const doneCount = steps.filter((s) => s.done).length;
 
   return (
-    <fieldset ref={fieldsetRef} className={fieldLabel}>
-      <legend className="mb-[5px] flex w-full justify-between">
-        <span>Steps</span>
-        {steps.length > 0 && (
-          <span className="font-normal">
-            {doneCount}/{steps.length} done
-          </span>
+    <>
+      <fieldset ref={fieldsetRef} className={fieldLabel}>
+        <legend className="mb-[5px] flex w-full justify-between">
+          <span>Steps</span>
+          {steps.length > 0 && (
+            <span className="font-normal">
+              {doneCount}/{steps.length} done
+            </span>
+          )}
+        </legend>
+
+        {/* A new task's steps go along with the form when it's submitted. */}
+        {!taskId && (
+          <input type="hidden" name="steps" value={JSON.stringify(steps.map(({ title, done }) => ({ title, done })))} />
         )}
-      </legend>
 
-      {/* A new task's steps go along with the form when it's submitted. */}
-      {!taskId && (
-        <input
-          type="hidden"
-          name="steps"
-          value={JSON.stringify(steps.map(({ title, done }) => ({ title, done })))}
-        />
-      )}
-
-      {steps.length > 0 && (
-        <ul className="overflow-hidden rounded-[10px] border border-line bg-surface">
-          {steps.map((step) => (
-            <li key={step.id} className="flex items-center gap-2 border-t border-line pl-1 first:border-t-0">
-              <button
-                type="button"
-                onClick={() => toggle(step)}
-                disabled={step.saving}
-                aria-label={step.done ? `Mark step "${step.title}" as not done` : `Mark step "${step.title}" as done`}
-                className="group flex-none p-2 disabled:opacity-50"
-              >
+        {steps.length > 0 && (
+          <ul className="overflow-hidden rounded-[10px] border border-line bg-surface">
+            {steps.map((step) => (
+              <li key={step.id} className="flex items-center gap-2 border-t border-line pl-1 first:border-t-0">
+                <button
+                  type="button"
+                  onClick={() => toggle(step)}
+                  disabled={step.saving}
+                  aria-label={step.done ? `Mark step "${step.title}" as not done` : `Mark step "${step.title}" as done`}
+                  className="group flex-none p-2 disabled:opacity-50"
+                >
+                  <span
+                    className={`grid size-[22px] place-items-center rounded-full border-2 ${
+                      step.done ? "border-accent bg-accent text-accent-ink" : "border-muted text-muted"
+                    }`}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                      className={`size-3 ${step.done ? "opacity-100" : "opacity-0 group-hover:opacity-35"}`}
+                    >
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  </span>
+                </button>
                 <span
-                  className={`grid size-[22px] place-items-center rounded-full border-2 ${
-                    step.done ? "border-accent bg-accent text-accent-ink" : "border-muted text-muted"
+                  className={`min-w-0 flex-1 py-2 text-[0.95rem] font-normal [overflow-wrap:anywhere] ${
+                    step.done ? "text-muted line-through" : "text-ink"
                   }`}
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="3.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden
-                    className={`size-3 ${step.done ? "opacity-100" : "opacity-0 group-hover:opacity-35"}`}
-                  >
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
+                  {step.title}
                 </span>
-              </button>
-              <span
-                className={`min-w-0 flex-1 py-2 text-[0.95rem] font-normal [overflow-wrap:anywhere] ${
-                  step.done ? "text-muted line-through" : "text-ink"
-                }`}
-              >
-                {step.title}
-              </span>
-              <button
-                type="button"
-                onClick={() => remove(step)}
-                disabled={step.saving}
-                aria-label={`Remove step "${step.title}"`}
-                className="flex-none px-3 py-2 text-[1.2rem] leading-none font-normal text-muted hover:text-high disabled:opacity-50"
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+                <button
+                  type="button"
+                  onClick={() => remove(step)}
+                  disabled={step.saving}
+                  aria-label={`Remove step "${step.title}"`}
+                  className="flex-none px-3 py-2 text-[1.2rem] leading-none font-normal text-muted hover:text-high disabled:opacity-50"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      <div className="flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter adds the step instead of submitting the whole form.
-            // (Not while an on-screen keyboard is still composing a word.)
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              add();
-            }
-          }}
-          maxLength={200}
-          placeholder="Add a step"
-          aria-label="New step"
-          autoComplete="off"
-          enterKeyHint="done"
-          className={input}
-        />
+        <div className="flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter adds the step instead of submitting the whole form.
+              // (Not while an on-screen keyboard is still composing a word.)
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                add();
+              }
+            }}
+            maxLength={200}
+            placeholder="Add a step"
+            aria-label="New step"
+            autoComplete="off"
+            enterKeyHint="done"
+            className={input}
+          />
+          <button
+            type="button"
+            onClick={add}
+            disabled={!draft.trim()}
+            className="flex-none rounded-[10px] border border-line bg-surface px-4 font-bold text-accent disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+
         <button
           type="button"
-          onClick={add}
-          disabled={!draft.trim()}
-          className="flex-none rounded-[10px] border border-line bg-surface px-4 font-bold text-accent disabled:opacity-50"
+          onClick={suggest}
+          disabled={suggesting}
+          className="self-start rounded-[10px] border border-line bg-surface px-4 py-2 font-bold text-accent disabled:opacity-60"
         >
-          Add
+          {suggesting ? "Claude is thinking…" : "✨ Suggest steps"}
         </button>
-      </div>
 
-      <button
-        type="button"
-        onClick={suggest}
-        disabled={suggesting}
-        className="self-start rounded-[10px] border border-line bg-surface px-4 py-2 font-bold text-accent disabled:opacity-60"
-      >
-        {suggesting ? "Claude is thinking…" : "✨ Suggest steps"}
-      </button>
+        {note && (
+          <p aria-live="polite" className="text-[0.9rem] font-normal text-muted">
+            {note}
+          </p>
+        )}
 
-      {note && (
-        <p aria-live="polite" className="text-[0.9rem] font-normal text-muted">
-          {note}
-        </p>
-      )}
+        {error && (
+          <p role="alert" className="text-[0.9rem] font-bold text-high">
+            {error}
+          </p>
+        )}
+      </fieldset>
 
-      {error && (
-        <p role="alert" className="text-[0.9rem] font-bold text-high">
-          {error}
-        </p>
-      )}
-    </fieldset>
+      {/* Lives here because this is where the current list of steps is kept. */}
+      <AskClaude stepTitles={steps.map((s) => s.title)} />
+    </>
   );
 }

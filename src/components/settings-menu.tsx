@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { signOut } from "@/app/login/actions";
 import { ConfirmDialog } from "./confirm-dialog";
+import { useBackdropClose } from "./use-backdrop-close";
 
 // The gear button in each screen's header, and the settings sheet it opens.
 // For now the sheet holds your account and Sign out; more settings can join later.
@@ -34,6 +35,7 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
   const dialogRef = useRef<HTMLDialogElement>(null);
   const signOutForm = useRef<HTMLFormElement>(null);
   const [confirming, setConfirming] = useState(false);
+  const backdropClose = useBackdropClose(onClose);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -46,7 +48,7 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
         aria-labelledby="settings-title"
         onClose={onClose}
         // A tap on the dimmed area (outside the panel) closes it.
-        onClick={(e) => e.target === e.currentTarget && onClose()}
+        {...backdropClose}
         className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
       >
         <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
