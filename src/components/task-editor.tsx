@@ -230,19 +230,55 @@ function TaskSheet({
       {...backdropClose}
       className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
     >
-      <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
-        <div className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 id="sheet-title" className="font-display text-[1.2rem] font-bold">
-            {task ? "Edit task" : "New task"}
-          </h2>
-          <button type="button" onClick={onClose} className="p-1.5 text-muted">
-            Close
-          </button>
+      {/* scroll-pt keeps a box you tap from hiding under the sticky top bar. */}
+      <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] scroll-pt-20 overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
+        {/* The top bar stays put while the form scrolls under it, iPhone-style:
+            Close on the left, Add / Save on the right, always in reach. */}
+        <div className="sticky top-0 z-10 -mx-1 mb-2 bg-bg px-1 pt-2.5 pb-2">
+          <div className="mx-auto mb-2 h-1 w-10 rounded bg-line" aria-hidden />
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <button type="button" onClick={onClose} className="justify-self-start py-1.5 pr-3 text-muted">
+              Close
+            </button>
+            <h2 id="sheet-title" className="font-display text-[1.2rem] font-bold">
+              {task ? "Edit task" : "New task"}
+            </h2>
+            {/* Lives outside the <form>; form="task-form" still makes it the form's save button. */}
+            <button
+              type="submit"
+              form="task-form"
+              disabled={saving}
+              className="justify-self-end rounded-full bg-accent px-4 py-1.5 font-bold text-accent-ink disabled:opacity-60"
+            >
+              {saving ? "Saving…" : task ? "Save" : "Add"}
+            </button>
+          </div>
+          {state.error && (
+            <p role="alert" className="mt-2 text-[0.9rem] font-bold text-high">
+              {state.error}
+            </p>
+          )}
         </div>
 
         <form
+          id="task-form"
           className="flex flex-col gap-3.5"
+          // Enter in a one-line box just closes the keyboard: saving is the Add /
+          // Save button (or Ctrl/⌘+Enter on a computer). Boxes that use Enter
+          // themselves (Add step, Ask Claude) handle it first and are left alone;
+          // Notes is a <textarea>, where Enter starts a new line as usual.
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.nativeEvent.isComposing || e.defaultPrevented) return;
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              e.currentTarget.requestSubmit();
+              return;
+            }
+            if (e.target instanceof HTMLInputElement) {
+              e.preventDefault();
+              e.target.blur();
+            }
+          }}
           // Submitting this way (instead of <form action>) keeps what you typed
           // in the boxes if saving fails, so you can fix it and try again.
           onSubmit={(e) => {
@@ -263,6 +299,7 @@ function TaskSheet({
               placeholder="e.g. Call the bank"
               autoComplete="off"
               autoFocus={!task}
+              enterKeyHint="done"
               className={input}
             />
           </label>
@@ -276,6 +313,7 @@ function TaskSheet({
               defaultValue={task ? task.category?.name : (defaultCategory ?? undefined)}
               placeholder="Personal"
               autoComplete="off"
+              enterKeyHint="done"
               className={input}
             />
             <datalist id="category-suggestions">
@@ -356,20 +394,6 @@ function TaskSheet({
           </label>
 
           <StepsEditor taskId={task?.id ?? null} initialSteps={task?.steps ?? []} />
-
-          {state.error && (
-            <p role="alert" className="text-[0.9rem] font-bold text-high">
-              {state.error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-xl bg-accent p-[13px] text-base font-bold text-accent-ink disabled:opacity-60"
-          >
-            {saving ? "Saving…" : task ? "Save changes" : "Add task"}
-          </button>
         </form>
 
         {task && <DeleteButton taskId={task.id} onDeleted={onClose} />}

@@ -16,7 +16,7 @@ import { AskClaude } from "./ask-claude";
 //   and notes as they are in the form right now (saved or not), then adds
 //   them like typed ones.
 // • On a new task, nothing exists on the server yet, so the steps are kept
-//   here and sent along when you tap "Add task" (as a hidden form field).
+//   here and sent along when you tap "Add" in the top bar (as a hidden form field).
 
 type Step = StepDTO & { saving?: boolean }; // saving = added, waiting for its real id
 
