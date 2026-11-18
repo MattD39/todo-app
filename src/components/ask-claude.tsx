@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { problemMessage } from "./api-problem";
 import { fieldLabel, input } from "./form-styles";
 
 // The "Ask Claude about this task" box in the task editor.
@@ -66,14 +67,8 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
         }),
       });
 
-      // A redirect means the login expired (the server sent us to /login).
       if (response.redirected || !response.ok || !response.body) {
-        const data: unknown = await response.json().catch(() => null);
-        const message =
-          typeof data === "object" && data !== null && "error" in data && typeof data.error === "string"
-            ? data.error
-            : "Your login may have expired. Reload the page and try again.";
-        setError(message);
+        setError(await problemMessage(response));
         setStatus("idle");
         return;
       }

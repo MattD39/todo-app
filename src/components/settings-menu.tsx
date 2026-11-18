@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { signOut } from "@/app/login/actions";
+import { clearSavedChat } from "./chat";
 import { ConfirmDialog } from "./confirm-dialog";
 import { useBackdropClose } from "./use-backdrop-close";
 
@@ -89,6 +90,7 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
           confirmLabel="Sign out"
           onConfirm={() => {
             setConfirming(false);
+            clearSavedChat(); // the next person on this device shouldn't see it
             signOutForm.current?.requestSubmit();
           }}
           onCancel={() => setConfirming(false)}

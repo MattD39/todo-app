@@ -12,10 +12,10 @@ import { RefreshOnReturn } from "./refresh-on-return";
 
 export { Status } from "./status";
 
-// The frame shared by the Today, Upcoming, Calendar and Done screens: title + date,
+// The frame shared by the Today, Upcoming, Calendar, Done and Chat screens: title + date,
 // summary line, category filter chips, the add/edit editor, and the tab bar.
 
-export type Tab = "today" | "upcoming" | "calendar" | "done";
+export type Tab = "today" | "upcoming" | "calendar" | "done" | "chat";
 
 const TABS: { tab: Tab; label: string; path: string; icon: React.ReactNode }[] = [
   {
@@ -42,9 +42,21 @@ const TABS: { tab: Tab; label: string; path: string; icon: React.ReactNode }[] =
     ),
   },
   { tab: "done", label: "Done", path: "/done", icon: <path d="M20 6 9 17l-5-5" /> },
+  {
+    tab: "chat",
+    label: "Chat",
+    path: "/chat",
+    icon: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
+  },
 ];
 
-const TITLES: Record<Tab, string> = { today: "Today", upcoming: "Upcoming", calendar: "Calendar", done: "Done" };
+const TITLES: Record<Tab, string> = {
+  today: "Today",
+  upcoming: "Upcoming",
+  calendar: "Calendar",
+  done: "Done",
+  chat: "Chat",
+};
 
 export type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -85,7 +97,8 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
           </>
         }
       >
-        <CategoryChips categories={data.categories} selected={data.category} />
+        {/* The chat always looks at every task, so the category filter doesn't apply there. */}
+        {tab !== "chat" && <CategoryChips categories={data.categories} selected={data.category} />}
       </ScreenHeader>
 
       {children}
@@ -144,7 +157,7 @@ function TabBar({ current, category }: { current: Tab; category: string | null }
   return (
     <nav
       aria-label="Screens"
-      className="fixed inset-x-0 bottom-0 z-[6] grid grid-cols-4 border-t border-line bg-surface pr-[max(8px,env(safe-area-inset-right,0px))] pb-[env(safe-area-inset-bottom,0px)] pl-[max(8px,env(safe-area-inset-left,0px))]"
+      className="fixed inset-x-0 bottom-0 z-[6] grid grid-cols-5 border-t border-line bg-surface pr-[max(8px,env(safe-area-inset-right,0px))] pb-[env(safe-area-inset-bottom,0px)] pl-[max(8px,env(safe-area-inset-left,0px))]"
     >
       {TABS.map(({ tab, label, icon }) => (
         <Link
