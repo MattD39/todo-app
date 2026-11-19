@@ -6,6 +6,9 @@ import { addTaskStep, addTaskSteps, removeTaskStep, tickTaskStep } from "@/app/t
 import { suggestTaskSteps } from "@/app/ai-actions";
 import { fieldLabel, input } from "./form-styles";
 import { AskClaude } from "./ask-claude";
+import type { ProblemCode } from "@/lib/problems";
+import { connectionProblem, isOffline, leftTodayNote, OFFLINE_MESSAGE, type Problem } from "./api-problem";
+import { ProblemNote } from "./problem-note";
 
 // The "Steps" checklist inside the task editor sheet.
 //
@@ -25,7 +28,10 @@ const MAX_STEPS = 50;
 export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; initialSteps: StepDTO[] }) {
   const [steps, setSteps] = useState<Step[]>(initialSteps);
   const [draft, setDraft] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
+  // Shows a message (or clears it with null). `code` comes with Claude problems,
+  // e.g. "signed_out" adds a Sign in button.
+  const setError = (message: string | null, code?: ProblemCode) => setProblem(message ? { message, code } : null);
   const [suggesting, setSuggesting] = useState(false);
   const [note, setNote] = useState<string | null>(null); // e.g. "Added 4 steps."
   const fieldsetRef = useRef<HTMLFieldSetElement>(null);
@@ -52,6 +58,11 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
 
     setError(null);
     setNote(null);
+    // No internet: say so straight away.
+    if (isOffline()) {
+      setError(OFFLINE_MESSAGE);
+      return;
+    }
     setSuggesting(true);
     try {
       const result = await suggestTaskSteps({
@@ -61,7 +72,7 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
         steps: steps.map((s) => s.title),
       });
       if (!result.steps) {
-        setError(result.error);
+        setError(result.error, result.code);
         return;
       }
       const titles = result.steps.slice(0, room);
@@ -84,9 +95,11 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
         const real = saved.steps;
         setSteps((s) => [...s.filter((step) => !tempIds.has(step.id)), ...real]);
       }
-      setNote(`Added ${titles.length} ${titles.length === 1 ? "step" : "steps"}. Remove any you don't need.`);
+      // Plus "2 step suggestions left today." when close to the daily limit.
+      const left = leftTodayNote(result.leftToday, "step suggestion", "step suggestions");
+      setNote(`Added ${titles.length} ${titles.length === 1 ? "step" : "steps"}. Remove any you don't need.${left ? ` ${left}` : ""}`);
     } catch {
-      setError("Couldn't reach Claude. Check your connection and try again.");
+      setError(connectionProblem().message);
     } finally {
       setSuggesting(false);
     }
@@ -258,11 +271,7 @@ export function StepsEditor({ taskId, initialSteps }: { taskId: string | null; i
           </p>
         )}
 
-        {error && (
-          <p role="alert" className="text-[0.9rem] font-bold text-high">
-            {error}
-          </p>
-        )}
+        <ProblemNote problem={problem} onSignedIn={() => setError(null)} />
       </fieldset>
 
       {/* Lives here because this is where the current list of steps is kept. */}

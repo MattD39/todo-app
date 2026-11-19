@@ -1,12 +1,18 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
+import { announceSignedIn } from "@/components/signed-in";
 import { signIn, type SignInState } from "./actions";
 
 const initialState: SignInState = { error: null, email: "" };
 
 export function LoginForm() {
   const [state, formAction, pending] = useActionState(signIn, initialState);
+
+  // Leaving this page means you're signed in (every other page sends you back
+  // here otherwise), so any "You've been signed out" message still showing in
+  // the app, like Chat's, is out of date. Signing in moves you on, then this runs.
+  useEffect(() => () => announceSignedIn(), []);
 
   return (
     <form action={formAction} className="flex flex-col gap-3.5">

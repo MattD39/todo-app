@@ -3,7 +3,9 @@
 import { useSyncExternalStore } from "react";
 import { applyChatChanges, undoChatChanges } from "@/app/chat-actions";
 import type { ChangeResult, ChatChange, UndoResult } from "@/lib/chat-changes";
-import { problemMessage } from "./api-problem";
+import { SIGNED_OUT_MESSAGE } from "@/lib/problems";
+import { connectionProblem, isOffline, leftTodayFrom, OFFLINE_MESSAGE, problemFrom, type Problem } from "./api-problem";
+import { onSignedIn } from "./signed-in";
 
 // The Chat tab's "engine": the conversation, the reply being written, saving
 // Claude's changes, Undo, Stop and Clear.
@@ -35,6 +37,7 @@ export type ChatMessage = {
   changes?: ChatChange[]; // changes Claude queued with this reply (not saved by Claude)
   saving?: boolean;
   results?: ShownResult[]; // how saving them went: the only thing that says ✓ done
+  failed?: Problem; // your messages only: it wasn't sent, and why (Try again / Edit under it)
 };
 
 // A saved change as shown in the chat, plus what happened when you pressed Undo.
@@ -46,7 +49,8 @@ export type ChatState = {
   sending: boolean; // a reply is on its way (Stop is showing)
   savingNow: boolean; // Claude's changes are being saved: too late to stop
   undoing: boolean; // an Undo is being saved
-  error: string | null;
+  error: Problem | null; // shown under the chat (with a Sign in button when signed out)
+  leftToday: number | null; // chat messages left today, after the last one sent
   unseen: boolean; // a reply finished while the Chat tab wasn't showing (the dot)
   chatShowing: boolean; // the Chat screen is on screen (then the tab shows no "…" or dot)
 };
@@ -58,6 +62,7 @@ const EMPTY: ChatState = {
   savingNow: false,
   undoing: false,
   error: null,
+  leftToday: null,
   unseen: false,
   chatShowing: false,
 };
@@ -113,34 +118,51 @@ export function setDraft(draft: string) {
   set({ draft });
 }
 
-// The message you stopped, if the chat ends with a stopped reply (for Try again / Edit).
+// The message to offer Try again / Edit for, if the chat ends with one: a
+// message whose reply you stopped, or a message that wasn't sent.
 export function stoppedMessageOf(messages: ChatMessage[]): string | null {
   const last = messages.at(-1);
+  if (last?.role === "user" && last.failed) return last.text;
   return last?.role === "assistant" && last.stopped && messages.at(-2)?.role === "user" ? messages.at(-2)!.text : null;
+}
+
+// The chat without that message (and its stopped reply), for Try again / Edit,
+// so the message isn't shown twice.
+function withoutRetried(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.at(-1);
+  if (stoppedMessageOf(messages) === null) return messages;
+  return last?.role === "user" ? messages.slice(0, -1) : messages.slice(0, -2);
 }
 
 // Sends a message and follows Claude's reply until it's finished and its
 // changes are saved, even if you switch tabs meanwhile.
-// `replaceStopped`: the message replaces a stopped one (Try again / Edit),
-// so that stopped exchange is taken out of the chat first.
+// `replaceStopped`: the message replaces a stopped or unsent one (Try again /
+// Edit), so that one is taken out of the chat first.
 export async function sendChat(text: string, { replaceStopped = false } = {}) {
   const message = text.trim();
   const { messages, sending, undoing } = current();
   if (!message || sending || undoing) return;
 
-  const stopped = stoppedMessageOf(messages);
-  const base = replaceStopped && stopped !== null ? messages.slice(0, -2) : messages;
+  const base = replaceStopped ? withoutRetried(messages) : messages;
   const history: ChatMessage[] = [...base, { role: "user", text: message }];
+
+  // Not sent: your message stays in the chat with a note saying why, plus
+  // Try again / Edit. (Not back in the box: Send sits where Stop was, so a
+  // second click would send it again.)
+  const markFailed = (problem: Problem) =>
+    set({ messages: [...base, { role: "user", text: message, failed: problem }], draft: "", error: null });
+
+  // No internet: say so straight away, without trying.
+  if (isOffline()) {
+    markFailed({ message: OFFLINE_MESSAGE });
+    return;
+  }
+
   const abort = new AbortController();
   inProgress = abort;
   // False once the chat was cleared (or you signed out) during this reply.
   const stillCurrent = () => inProgress === abort;
   set({ messages: [...history, { role: "assistant", text: "" }], draft: "", error: null, sending: true });
-
-  // On a problem before Claude wrote anything, take the message back out and
-  // put it back in the box, so pressing Send again retries it. (Not after
-  // Stop: Send sits where Stop was, so a second click would send it again.)
-  const giveBack = (problem: string) => set({ messages: base, draft: message, error: problem });
 
   let reply = "";
   // Stopped: keep your message and what Claude wrote so far; nothing is saved.
@@ -151,14 +173,16 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: abort.signal,
-      body: JSON.stringify({ messages: history.map(toTurn) }),
+      // (Messages that weren't sent never reached Claude, so they're left out.)
+      body: JSON.stringify({ messages: history.filter((m) => !m.failed).map(toTurn) }),
     });
 
     if (response.redirected || !response.ok || !response.body) {
-      const problem = await problemMessage(response);
-      if (stillCurrent()) giveBack(problem);
+      const problem = await problemFrom(response);
+      if (stillCurrent()) markFailed(problem);
       return;
     }
+    set({ leftToday: leftTodayFrom(response) });
 
     // Read the reply piece by piece and show each piece as it arrives.
     const reader = response.body.getReader();
@@ -180,9 +204,10 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
     // Claude's changes are saved straight away; from here on Stop is off.
     if (changes) {
       set({ savingNow: true, messages: [...history, { ...answer, saving: true }] });
-      const results = await saveChanges(changes);
+      const { results, signedOut } = await saveChanges(changes);
       if (!stillCurrent()) return; // the chat was cleared meanwhile
       answer = { ...answer, results };
+      if (signedOut) set({ error: { message: SIGNED_OUT_MESSAGE, code: "signed_out" } });
     }
     set({ messages: [...history, answer] });
   } catch {
@@ -192,10 +217,10 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
     } else if (reply) {
       set({
         messages: [...history, { role: "assistant", text: splitReply(reply).text, stopped: true }],
-        error: "The reply was cut off. Try asking again.",
+        error: { message: "The reply was cut off. Try asking again." },
       });
     } else {
-      giveBack("Couldn't reach Claude. Check your connection and try again.");
+      markFailed(connectionProblem());
     }
   } finally {
     if (stillCurrent()) {
@@ -205,6 +230,27 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
     }
   }
 }
+
+// Takes the message under the chat away (e.g. once you've signed in again).
+export function clearChatError() {
+  set({ error: null });
+}
+
+// Signed in again from any Sign in button (even on another tab): the chat's
+// "You've been signed out" message is out of date.
+// A message that wasn't sent because you were signed out keeps its note, but
+// without the Sign in button.
+// (current() reads the saved chat first if it hasn't been yet, e.g. right
+// after the page was reloaded on the sign-in screen.)
+onSignedIn(() => {
+  const { error, messages } = current();
+  const signedOut = (p?: Problem | null) => p?.code === "signed_out";
+  if (!signedOut(error) && !messages.some((m) => signedOut(m.failed))) return;
+  set({
+    error: signedOut(error) ? null : error,
+    messages: messages.map((m) => (signedOut(m.failed) ? { ...m, failed: { message: "You were signed out." } } : m)),
+  });
+});
 
 // Stops the reply being written (only offered on the Chat screen).
 export function stopChat() {
@@ -230,6 +276,7 @@ export async function undoChat(at: number, which: number[]) {
     });
     const response = await undoChatChanges(undos);
     outcome = response.results ?? failAll(response.error ?? "Nothing was undone.");
+    if (response.code === "signed_out") set({ error: { message: SIGNED_OUT_MESSAGE, code: "signed_out" } });
   } catch {
     outcome = failAll("Couldn't reach the app, so nothing was undone. Check your connection.");
   }
@@ -261,7 +308,7 @@ export function clearChat() {
 // the next person on this device shouldn't see it).
 export function clearSavedChat() {
   clearChat();
-  set({ draft: "", unseen: false, undoing: false });
+  set({ draft: "", unseen: false, undoing: false, leftToday: null });
 }
 
 // Splits what the server sent into Claude's text and the change details.
@@ -294,13 +341,14 @@ function toTurn(m: ChatMessage) {
 // Saves Claude's changes and says how each one went. Never throws: a
 // problem becomes a ✗ result for every change. Saving also tells every tab
 // to reload its list (see chat-actions.ts), so they show the changes.
-async function saveChanges(changes: ChatChange[]): Promise<ChangeResult[]> {
+// signedOut: nothing was saved because the login had expired.
+async function saveChanges(changes: ChatChange[]): Promise<{ results: ChangeResult[]; signedOut: boolean }> {
   const failAll = (error: string) => changes.map((c): ChangeResult => ({ ok: false, summary: c.summary, error }));
   try {
-    const { error, results } = await applyChatChanges(changes);
-    return results ?? failAll(error ?? "Nothing was saved.");
+    const { error, code, results } = await applyChatChanges(changes);
+    return { results: results ?? failAll(error ?? "Nothing was saved."), signedOut: code === "signed_out" };
   } catch {
-    return failAll("Couldn't reach the app, so nothing was saved. Check your connection.");
+    return { results: failAll("Couldn't reach the app, so nothing was saved. Check your connection."), signedOut: false };
   }
 }
 
@@ -333,7 +381,13 @@ function parseSaved(raw: string | null): ChatMessage[] {
           (m.role === "user" || m.role === "assistant") &&
           typeof m.text === "string",
       )
-      .map((m) => ({ ...m, saving: undefined })); // a save cut short by closing the app isn't still running
+      .map((m) => ({
+        ...m,
+        saving: undefined, // a save cut short by closing the app isn't still running
+        // The saved chat is only read on a signed-in screen (the app sends you
+        // to sign in first otherwise), so "signed out" is old news: no Sign in button.
+        ...(m.failed?.code === "signed_out" ? { failed: { message: "You were signed out." } } : {}),
+      }));
   } catch {
     return [];
   }

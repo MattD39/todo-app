@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { problemMessage } from "./api-problem";
+import { connectionProblem, isOffline, leftTodayFrom, leftTodayNote, OFFLINE_MESSAGE, problemFrom, type Problem } from "./api-problem";
 import { fieldLabel, input } from "./form-styles";
+import { ProblemNote } from "./problem-note";
 
 // The "Ask Claude about this task" box in the task editor.
 //
@@ -21,7 +22,8 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [status, setStatus] = useState<Status>("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Problem | null>(null);
+  const [leftToday, setLeftToday] = useState<number | null>(null); // questions left today, after the last one
   const boxRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -37,7 +39,12 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
       return typeof value === "string" ? value : "";
     };
     if (!field("title").trim()) {
-      setError("Give the task a title first, so Claude knows what it's about.");
+      setError({ message: "Give the task a title first, so Claude knows what it's about." });
+      return;
+    }
+    // No internet: say so straight away (the question stays in the box).
+    if (isOffline()) {
+      setError({ message: OFFLINE_MESSAGE });
       return;
     }
 
@@ -45,6 +52,7 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
     abortRef.current = abort;
     setError(null);
     setAnswer("");
+    setLeftToday(null);
     setStatus("asking");
     let got = "";
     try {
@@ -68,10 +76,12 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
       });
 
       if (response.redirected || !response.ok || !response.body) {
-        setError(await problemMessage(response));
+        setError(await problemFrom(response));
         setStatus("idle");
         return;
       }
+
+      setLeftToday(leftTodayFrom(response));
 
       // Read the answer piece by piece and show each piece as it arrives.
       const reader = response.body.getReader();
@@ -91,11 +101,7 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
         return;
       }
       setStatus(got ? "done" : "idle");
-      setError(
-        got
-          ? "The answer was cut off. Try asking again."
-          : "Couldn't reach Claude. Check your connection and try again.",
-      );
+      setError(got ? { message: "The answer was cut off. Try asking again." } : connectionProblem());
     } finally {
       if (abortRef.current === abort) abortRef.current = null;
     }
@@ -106,6 +112,8 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
   }
 
   const asking = status === "asking";
+  // "3 Ask Claude questions left today." once an answer is in, when close to the limit.
+  const leftNote = status === "done" ? leftTodayNote(leftToday, "Ask Claude question", "Ask Claude questions") : "";
 
   return (
     <div ref={boxRef} className={fieldLabel}>
@@ -159,11 +167,9 @@ export function AskClaude({ stepTitles }: { stepTitles: string[] }) {
         </div>
       )}
 
-      {error && (
-        <p role="alert" className="text-[0.9rem] font-bold text-high">
-          {error}
-        </p>
-      )}
+      {leftNote && <p className="text-[0.85rem] font-normal text-muted">{leftNote}</p>}
+
+      <ProblemNote problem={error} onSignedIn={() => setError(null)} />
     </div>
   );
 }

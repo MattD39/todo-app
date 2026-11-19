@@ -99,6 +99,22 @@ for (const c of cases) {
   );
 }
 
+// The "X left today" note under answers (shown only when 5 or fewer are left).
+const { leftTodayNote } = await jiti.import<typeof import("../src/components/api-problem.ts")>(
+  path.join(root, "src/components/api-problem.ts"),
+);
+const notes: [number | null, string][] = [
+  [6, ""],
+  [5, "5 chat messages left today."],
+  [1, "1 chat message left today."],
+  [0, "That was your last chat message for today. More at midnight."],
+  [null, ""],
+];
+for (const [left, expected] of notes) {
+  const got = leftTodayNote(left, "chat message", "chat messages");
+  check(`"left today" note with ${left} left: ${JSON.stringify(expected)}`, got === expected, `got ${JSON.stringify(got)}`);
+}
+
 // The script's own SDK copy should be the app's (otherwise the cases above prove little).
 check("the checks use the same Anthropic SDK as the app", AppAnthropic === Anthropic || AppAnthropic.APIError === Anthropic.APIError);
 

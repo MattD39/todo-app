@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   chatViewOpened,
   clearChat,
+  clearChatError,
   sendChat,
   setDraft,
   stopChat,
@@ -12,8 +13,10 @@ import {
   useChat,
   type ChatMessage,
 } from "./chat-store";
+import { leftTodayNote } from "./api-problem";
 import { ConfirmDialog } from "./confirm-dialog";
 import { input } from "./form-styles";
+import { ProblemNote } from "./problem-note";
 
 // The Chat tab: talk to Claude about all your tasks.
 //
@@ -31,7 +34,13 @@ const STARTERS = [
 ];
 
 export function Chat() {
-  const { messages, draft, sending, savingNow, undoing, error } = useChat();
+  const { messages, draft, sending, savingNow, undoing, error, leftToday } =
+    useChat();
+  // "3 chat messages left today." under the newest reply, when close to the limit.
+  const leftNote =
+    !sending && messages.length > 0
+      ? leftTodayNote(leftToday, "chat message", "chat messages")
+      : "";
   // Try again / Edit after a stopped reply. Off for a moment right after Stop,
   // so fast clicking can't hit them by accident.
   const [retryReady, setRetryReady] = useState(true);
@@ -55,7 +64,7 @@ export function Chat() {
     if (followRef.current) scrollToBottom();
   }, [followRef, messages.length, lastMessage, error]);
 
-  // The message you stopped, if the chat ends with a stopped reply (for Try again / Edit).
+  // The message to offer Try again / Edit for: its reply was stopped, or it wasn't sent.
   const stoppedMessage = stoppedMessageOf(messages);
 
   function send(text: string, options?: { replaceStopped?: boolean }) {
@@ -84,8 +93,9 @@ export function Chat() {
       {messages.length === 0 ? (
         <div className="mt-4 flex flex-col gap-3">
           <p className="text-muted">
-            Ask Claude about your tasks: what&apos;s due, what to do first, or how your week went. Claude can also add
-            tasks, change them or tick them off for you.
+            Ask Claude about your tasks: what&apos;s due, what to do first, or
+            how your week went. Claude can also add tasks, change them or tick
+            them off for you.
           </p>
           <div className="flex flex-wrap gap-2">
             {STARTERS.map((starter) => (
@@ -103,32 +113,57 @@ export function Chat() {
       ) : (
         <div className="mt-2 flex flex-col gap-2.5" aria-live="polite">
           {messages.map((m, i) => {
-            const thinking = m.role === "assistant" && !m.text && sending && i === messages.length - 1;
+            const thinking =
+              m.role === "assistant" &&
+              !m.text &&
+              sending &&
+              i === messages.length - 1;
             return (
-              <div
-                key={i}
-                className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 whitespace-pre-wrap ${
-                  m.role === "user"
-                    ? "self-end rounded-br-md bg-accent text-accent-ink"
-                    : "self-start rounded-bl-md border border-line bg-surface text-ink"
-                }`}
-              >
-                {thinking ? <span className="text-muted">Claude is thinking…</span> : m.text}
-                {m.stopped && (
-                  <span className="text-muted">{m.text ? " (stopped, nothing was changed)" : "Stopped. Nothing was changed."}</span>
+              <Fragment key={i}>
+                <div
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 whitespace-pre-wrap ${
+                    m.role === "user"
+                      ? "self-end rounded-br-md bg-accent text-accent-ink"
+                      : "self-start rounded-bl-md border border-line bg-surface text-ink"
+                  }`}
+                >
+                  {thinking ? (
+                    <span className="text-muted">Claude is thinking…</span>
+                  ) : (
+                    m.text
+                  )}
+                  {m.stopped && (
+                    <span className="text-muted">
+                      {m.text
+                        ? " (stopped, nothing was changed)"
+                        : "Stopped. Nothing was changed."}
+                    </span>
+                  )}
+                  {m.changes && (
+                    <ChangesNote
+                      message={m}
+                      busy={sending || undoing}
+                      onUndo={(which) => undo(i, which)}
+                    />
+                  )}
+                </div>
+                {/* Your message wasn't sent: why (with Sign in when signed out). */}
+                {m.failed && (
+                  <div className="-mt-1 max-w-[85%] self-end text-right">
+                    <ProblemNote problem={m.failed} prefix="Not sent." />
+                  </div>
                 )}
-                {m.changes && (
-                  <ChangesNote message={m} busy={sending || undoing} onUndo={(which) => undo(i, which)} />
-                )}
-              </div>
+              </Fragment>
             );
           })}
 
-          {/* Under the stopped reply, well away from the Stop button (which sits in
-              the bar at the bottom and covers the page there). The message only
-              goes back in the box when you choose Edit. */}
+          {/* Under the stopped reply or unsent message, well away from the Stop
+              button (which sits in the bar at the bottom and covers the page
+              there). The message only goes back in the box when you choose Edit. */}
           {stoppedMessage !== null && !sending && (
-            <div className="flex gap-2 self-start">
+            <div
+              className={`flex gap-2 ${messages.at(-1)?.role === "user" ? "self-end" : "self-start"}`}
+            >
               <button
                 type="button"
                 disabled={!retryReady}
@@ -154,10 +189,12 @@ export function Chat() {
         </div>
       )}
 
+      {leftNote && <p className="mt-3 text-[0.85rem] text-muted">{leftNote}</p>}
+
       {error && (
-        <p role="alert" className="mt-3 text-[0.9rem] font-bold text-high">
-          {error}
-        </p>
+        <div className="mt-3">
+          <ProblemNote problem={error} onSignedIn={clearChatError} />
+        </div>
       )}
 
       {/* Sits just above the tab bar (or above the keyboard while typing). */}
@@ -265,7 +302,9 @@ function ChangesNote({
 }) {
   const { changes = [], results, saving } = message;
   // Changes that were saved and haven't been undone yet.
-  const undoable = (results ?? []).flatMap((r, i) => (r.ok && !r.undone ? [i] : []));
+  const undoable = (results ?? []).flatMap((r, i) =>
+    r.ok && !r.undone ? [i] : [],
+  );
   const smallButton =
     "flex-none rounded-full border border-line bg-bg px-3 py-1 text-[0.85rem] font-bold text-ink disabled:opacity-50";
   return (
@@ -284,7 +323,12 @@ function ChangesNote({
                     ) : (
                       <>
                         <span>✓ {r.summary}</span>
-                        <button type="button" disabled={busy} onClick={() => onUndo([i])} className={smallButton}>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onUndo([i])}
+                          className={smallButton}
+                        >
                           Undo
                         </button>
                       </>
@@ -295,13 +339,22 @@ function ChangesNote({
                     ✗ Not saved: {r.summary}. {r.error}
                   </span>
                 )}
-                {r.undoError && <p className="text-[0.85rem] font-bold text-high">Couldn&apos;t undo: {r.undoError}</p>}
+                {r.undoError && (
+                  <p className="text-[0.85rem] font-bold text-high">
+                    Couldn&apos;t undo: {r.undoError}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
           {undoable.length >= 2 && (
             <div className="mt-2 flex justify-end">
-              <button type="button" disabled={busy} onClick={() => onUndo(undoable)} className={smallButton}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onUndo(undoable)}
+                className={smallButton}
+              >
                 Undo all
               </button>
             </div>
@@ -335,7 +388,8 @@ function useFollowBottom() {
     let lastY = window.scrollY;
     const onScroll = () => {
       const y = window.scrollY;
-      const nearBottom = window.innerHeight + y >= document.documentElement.scrollHeight - 80;
+      const nearBottom =
+        window.innerHeight + y >= document.documentElement.scrollHeight - 80;
       if (nearBottom) follow.current = true;
       else if (y < lastY) follow.current = false; // you scrolled up
       lastY = y;
@@ -359,7 +413,8 @@ function useKeepAboveKeyboard(ref: React.RefObject<HTMLElement | null>) {
     const place = () => {
       const covered = window.innerHeight - view.height - view.offsetTop;
       // Over 100px hidden means a keyboard (not just a toolbar); ignore pinch-zoom.
-      el.style.bottom = covered > 100 && Math.abs(view.scale - 1) < 0.01 ? `${covered}px` : "";
+      el.style.bottom =
+        covered > 100 && Math.abs(view.scale - 1) < 0.01 ? `${covered}px` : "";
     };
 
     place();
