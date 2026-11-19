@@ -65,18 +65,19 @@ async function countAll() {
     steps: await count(`SELECT 1 FROM "Subtask"`),
     completions: await count(`SELECT 1 FROM "TaskCompletion"`),
     categories: await count(`SELECT 1 FROM "Category"`),
+    claudeUsage: await count(`SELECT 1 FROM "ClaudeUsage"`),
   };
 }
 
-// The database must refuse this statement. A savepoint keeps the refusal from
-// spoiling the rest of the transaction.
-async function assertRefused(sql: string, params: unknown[] = []) {
+// The database must refuse this statement (by default: because of the row
+// rules). A savepoint keeps the refusal from spoiling the rest of the transaction.
+async function assertRefused(sql: string, params: unknown[] = [], reason: RegExp = /row-level security/) {
   await client.query("SAVEPOINT attempt");
   try {
     await client.query(sql, params);
     assert.fail(`The database allowed it: ${sql}`);
   } catch (error) {
-    assert.match((error as Error).message, /row-level security/);
+    assert.match((error as Error).message, reason);
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT attempt");
   }
@@ -108,14 +109,14 @@ async function createOtherUsersTask(): Promise<string> {
 test("a user with no rows sees nothing, even with no userId filter", async () => {
   await inThrowawayTransaction(async () => {
     await actAs(NOBODY);
-    assert.deepEqual(await countAll(), { tasks: 0, steps: 0, completions: 0, categories: 0 });
+    assert.deepEqual(await countAll(), { tasks: 0, steps: 0, completions: 0, categories: 0, claudeUsage: 0 });
   });
 });
 
 test("if the app forgets to say who is signed in, nothing is visible", async () => {
   await inThrowawayTransaction(async () => {
     await actAs(null);
-    assert.deepEqual(await countAll(), { tasks: 0, steps: 0, completions: 0, categories: 0 });
+    assert.deepEqual(await countAll(), { tasks: 0, steps: 0, completions: 0, categories: 0, claudeUsage: 0 });
   });
 });
 
@@ -191,6 +192,58 @@ test("you can't create rows for another user or hand yours over", async (t) => {
   });
 });
 
+// ─── The Claude usage table (Phase 7 Step 5): the limits can't be dodged ─────
+
+test("another user's Claude usage stays invisible, and you can't add usage for them", async () => {
+  await inThrowawayTransaction(async () => {
+    await actAsOwner();
+    await client.query(`INSERT INTO "ClaudeUsage" (id, "userId", feature) VALUES (gen_random_uuid(), $1, 'chat')`, [
+      OTHER_USER,
+    ]);
+
+    await actAs(NOBODY); // "you": a made-up user
+    assert.equal(await count(`SELECT 1 FROM "ClaudeUsage"`), 0, "their usage is invisible");
+    const changed = await client.query(`UPDATE "ClaudeUsage" SET "inputTokens" = 5 WHERE "userId" = $1`, [OTHER_USER]);
+    assert.equal(changed.rowCount, 0, "their usage can't be changed");
+    await assertRefused(`INSERT INTO "ClaudeUsage" (id, "userId", feature) VALUES (gen_random_uuid(), $1, 'chat')`, [
+      OTHER_USER,
+    ]);
+  });
+});
+
+test("you can't un-count, back-date or hand over your own Claude usage", async () => {
+  await inThrowawayTransaction(async () => {
+    await actAs(NOBODY);
+    // What the app does: only id, owner and feature; the time comes from the database.
+    const { rows } = await client.query(
+      `INSERT INTO "ClaudeUsage" (id, "userId", feature) VALUES (gen_random_uuid(), $1, 'ask') RETURNING id`,
+      [NOBODY],
+    );
+    const id = rows[0].id;
+    const denied = /permission denied/;
+
+    await assertRefused(`DELETE FROM "ClaudeUsage" WHERE id = $1`, [id], denied); // un-count it
+    await assertRefused(`UPDATE "ClaudeUsage" SET "startedAt" = now() - interval '2 days' WHERE id = $1`, [id], denied);
+    await assertRefused(`UPDATE "ClaudeUsage" SET "userId" = $1 WHERE id = $2`, [OTHER_USER, id], denied);
+    await assertRefused(`UPDATE "ClaudeUsage" SET feature = 'chat' WHERE id = $1`, [id], denied);
+    await assertRefused(
+      `INSERT INTO "ClaudeUsage" (id, "userId", feature, "startedAt")
+       VALUES (gen_random_uuid(), $1, 'ask', now() - interval '2 days')`,
+      [NOBODY],
+      denied,
+    );
+    await assertRefused(`UPDATE "ClaudeUsage" SET "costUsd" = -1 WHERE id = $1`, [id], /check constraint/);
+
+    // Filling in the result is allowed (that's how the cost gets saved).
+    const finished = await client.query(
+      `UPDATE "ClaudeUsage" SET "finishedAt" = now(), "inputTokens" = 10, "outputTokens" = 5, "costUsd" = 0.0001
+       WHERE id = $1`,
+      [id],
+    );
+    assert.equal(finished.rowCount, 1);
+  });
+});
+
 test("the switch to app_user ends with the transaction", async () => {
   await inThrowawayTransaction(async () => {
     await actAs(NOBODY);
@@ -204,7 +257,7 @@ test("the public web API (Supabase Data API) is still locked", async () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   assert.ok(url && key, "Supabase URL or publishable key is missing from .env.local");
-  for (const table of ["Task", "Subtask", "TaskCompletion", "Category"]) {
+  for (const table of ["Task", "Subtask", "TaskCompletion", "Category", "ClaudeUsage"]) {
     const response: Response = await fetch(`${url}/rest/v1/${table}?select=*`, { headers: { apikey: key } });
     assert.equal(response.status, 401, table);
   }
