@@ -48,6 +48,7 @@ export type ChatState = {
   undoing: boolean; // an Undo is being saved
   error: string | null;
   unseen: boolean; // a reply finished while the Chat tab wasn't showing (the dot)
+  chatShowing: boolean; // the Chat screen is on screen (then the tab shows no "…" or dot)
 };
 
 const EMPTY: ChatState = {
@@ -58,6 +59,7 @@ const EMPTY: ChatState = {
   undoing: false,
   error: null,
   unseen: false,
+  chatShowing: false,
 };
 
 let state: ChatState | null = null; // read from sessionStorage the first time it's needed
@@ -91,13 +93,14 @@ export function useChat(): ChatState {
 }
 
 // Called by the Chat screen while it's showing: clears the dot, and while
-// it's showing a finished reply doesn't add one. Returns the "stopped
+// it's showing the tab shows no "…" and a finished reply doesn't add a dot. Returns the "stopped
 // showing" function. (Switching tabs hides the screen, which counts as stopped.)
 export function chatViewOpened(): () => void {
   openViews++;
-  if (current().unseen) set({ unseen: false });
+  set({ unseen: false, chatShowing: true });
   return () => {
     openViews--;
+    set({ chatShowing: openViews > 0 });
   };
 }
 
