@@ -3,13 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
-// Runs in the browser. It does two small jobs and draws nothing:
-//
-// 1. Tells the server your time zone by saving it in a cookie. If it was
-//    missing or has changed (first visit, or you travelled), it reloads the
-//    data so "today" is worked out correctly.
-// 2. When you come back to the app (e.g. reopen it on your phone the next
-//    morning), it reloads the data so the lists aren't stale.
+// Runs in the browser and draws nothing. Tells the server your time zone by
+// saving it in a cookie. If it was missing or has changed (first visit, or
+// you travelled), it reloads the data so "today" is worked out correctly.
+// (Reloading when you come back to the app is RefreshOnReturn's job.)
 export function TimeZoneSync({ serverTimeZone }: { serverTimeZone: string }) {
   const router = useRouter();
 
@@ -23,14 +20,6 @@ export function TimeZoneSync({ serverTimeZone }: { serverTimeZone: string }) {
       router.refresh();
     }
   }, [serverTimeZone, router]);
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") router.refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [router]);
 
   return null;
 }
