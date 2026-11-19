@@ -4,6 +4,7 @@ import { unstable_rethrow } from "next/navigation";
 import { ClaudeError, type ChangeReport, type ChatTurn, type TaskForClaude } from "./ai";
 import { MAX_CHANGES_PER_MESSAGE } from "./chat-changes";
 import { MAX_CATEGORY, MAX_NOTES, MAX_STEPS, MAX_TITLE } from "./tasks";
+import { LimitError, type ClaudeUse } from "./usage";
 
 // Shared checks for everything that sends a request to Claude from the browser
 // (the server actions in src/app/ai-actions.ts and the /api/ask and /api/chat
@@ -60,7 +61,16 @@ function cleanReports(input: unknown): ChangeReport[] {
 // key) still comes back as a normal { error } message instead of a broken stream.
 // If something breaks halfway, the stream just stops with an error and the
 // browser says the answer was cut off.
-export async function streamTextResponse(pieces: AsyncGenerator<string>, stop: AbortController): Promise<Response> {
+//
+// `use` is the counted use of Claude (from startClaudeUse): its cost is saved
+// when the answer ends, however it ends, and the browser is told how many uses
+// are left today (the X-Left-Today header).
+export async function streamTextResponse(
+  answer: AsyncGenerator<string>,
+  stop: AbortController,
+  use: ClaudeUse,
+): Promise<Response> {
+  const pieces = savingCost(answer, use);
   const first = await pieces.next();
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -80,11 +90,42 @@ export async function streamTextResponse(pieces: AsyncGenerator<string>, stop: A
     },
     cancel() {
       stop.abort();
+      // Also close the answer if it's paused between pieces (nobody will ask
+      // for the next one now), so its cost still gets saved.
+      void pieces.return(undefined);
     },
   });
   return new Response(stream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Left-Today": String(use.leftToday),
+    },
   });
+}
+
+// The answer, unchanged, then saves what it cost once it ends: finished,
+// failed or stopped.
+async function* savingCost(answer: AsyncGenerator<string>, use: ClaudeUse): AsyncGenerator<string> {
+  try {
+    yield* answer;
+  } finally {
+    await use.finish();
+  }
+}
+
+// The { error } reply for a failed Claude request, with a status that says
+// what kind of problem it was. A limit gets 429 ("too many requests") and a
+// Retry-After header saying how many seconds until it's allowed again.
+export function claudeErrorResponse(error: unknown): Response {
+  const message = claudeErrorMessage(error); // re-throws the "go to /login" redirect
+  if (error instanceof LimitError) {
+    return Response.json(
+      { error: message },
+      { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": String(error.retryAfterSeconds) } },
+    );
+  }
+  return errorResponse(message, 502);
 }
 
 // Fires when the browser goes away (Stop button, screen closed), so Claude
@@ -133,7 +174,7 @@ export function cleanQuestion(input: unknown): string {
 export function claudeErrorMessage(error: unknown): string {
   // An expired login "throws" a redirect to /login; let Next.js carry it out.
   unstable_rethrow(error);
-  if (error instanceof ClaudeError) return error.message;
+  if (error instanceof ClaudeError || error instanceof LimitError) return error.message;
   // You pressed Stop (or closed the screen): not a problem, nothing to log.
   if (error instanceof Anthropic.APIUserAbortError) return "Stopped.";
   if (error instanceof Anthropic.RateLimitError) {

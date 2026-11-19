@@ -88,3 +88,29 @@ model TaskCompletion {
 
   @@index([taskId, completedOn])
 }
+
+// The Claude features, for counting each person's use (see src/lib/usage.ts).
+enum ClaudeFeature {
+  suggest_steps
+  ask
+  chat
+}
+
+// One row each time someone uses a Claude feature, so the server can enforce
+// each person's limits (per minute, per day, and money spent per day).
+// Written when the request starts; the token counts and cost are filled in
+// when Claude finishes (finishedAt set). Rows are never deleted by the app.
+model ClaudeUsage {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String        @db.Uuid
+  feature      ClaudeFeature
+  startedAt    DateTime      @default(now()) @db.Timestamptz
+  finishedAt   DateTime?     @db.Timestamptz
+  inputTokens  Int           @default(0)
+  outputTokens Int           @default(0)
+  // What Claude charged for this request, in US dollars (an estimate if you
+  // pressed Stop part-way, on the high side).
+  costUsd      Float         @default(0)
+
+  @@index([userId, startedAt])
+}

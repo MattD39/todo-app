@@ -1,7 +1,7 @@
 import "server-only";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import type Anthropic from "@anthropic-ai/sdk";
-import { MODEL, USER_DATA_RULE, asUserData, getClaude } from "./claude";
+import { MAX_TOKENS, MODEL, USER_DATA_RULE, asUserData, getClaude, type ClaudeMeter } from "./claude";
 import {
   cleanFields,
   describeAdd,
@@ -52,15 +52,17 @@ const stepsFormat = jsonSchemaOutputFormat({
 });
 
 // Returns new step titles for the task. Doesn't save them.
-export async function suggestSteps(task: TaskForClaude): Promise<string[]> {
+// `meter` adds up what it cost (for the daily spending cap; see usage.ts).
+export async function suggestSteps(task: TaskForClaude, meter: ClaudeMeter): Promise<string[]> {
   const response = await getClaude().messages.parse({
     model: MODEL,
-    max_tokens: 4000,
+    max_tokens: MAX_TOKENS,
     // A small, simple job: low effort keeps it quick and cheap.
     output_config: { effort: "low", format: stepsFormat },
     system: SUGGEST_STEPS_PROMPT,
     messages: [{ role: "user", content: `${asUserData(describe(task))}\n\nSuggest steps for this task.` }],
   });
+  meter.add(response.usage);
 
   if (response.stop_reason === "refusal") throw new ClaudeError("Claude couldn't help with this task.");
   const already = new Set(task.steps.map((s) => s.trim().toLowerCase()));
@@ -85,11 +87,13 @@ const ASK_PROMPT =
 // Answers a question about the task, a piece at a time as Claude writes it.
 // `today` ("YYYY-MM-DD", the user's time zone) lets Claude talk about due dates.
 // Aborting `signal` stops Claude straight away (so it stops costing money too).
+// `meter` adds up what it cost (for the daily spending cap; see usage.ts).
 export async function* askAboutTask(
   task: TaskForClaude,
   question: string,
   today: string,
   signal: AbortSignal,
+  meter: ClaudeMeter,
 ): AsyncGenerator<string> {
   yield* streamAnswer(
     ASK_PROMPT,
@@ -101,6 +105,7 @@ export async function* askAboutTask(
       },
     ],
     signal,
+    meter,
   );
 }
 
@@ -247,11 +252,13 @@ const MAX_ROUNDS = 4;
 //
 // Changes Claude asks for are added to `queue`; nothing is saved here. The
 // caller decides what to do with them once the reply is finished.
+// `meter` adds up what all the rounds cost (for the daily spending cap).
 export async function* chatAboutTasks(
   turns: ChatTurn[],
   snapshot: ChatSnapshot,
   signal: AbortSignal,
   queue: ChatChange[],
+  meter: ClaudeMeter,
 ): AsyncGenerator<string> {
   const { now } = snapshot;
   const labels = taskLabels(snapshot.open);
@@ -278,6 +285,7 @@ export async function* chatAboutTasks(
       { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
       signal,
       wroteSomething,
+      meter,
     );
     wroteSomething ||= message.content.some((b) => b.type === "text" && b.text.trim() !== "");
 
@@ -449,8 +457,9 @@ async function* streamAnswer(
   system: string,
   messages: Anthropic.MessageParam[],
   signal: AbortSignal,
+  meter: ClaudeMeter,
 ): AsyncGenerator<string> {
-  const message = yield* streamOnce({ system, messages }, signal, false);
+  const message = yield* streamOnce({ system, messages }, signal, false, meter);
   const wroteSomething = message.content.some((b) => b.type === "text" && b.text.trim() !== "");
   if (message.stop_reason === "refusal" && !wroteSomething) {
     throw new ClaudeError("Claude couldn't help with that question.");
@@ -464,15 +473,17 @@ async function* streamAnswer(
 // One request to Claude: yields its text as it arrives, then returns the whole
 // message (so tool calls and the stop reason can be checked). `gapFirst` puts
 // a blank line before this round's text, when an earlier round already wrote some.
+// What the request cost goes into `meter`, even if it's stopped part-way.
 async function* streamOnce(
   params: Pick<Anthropic.MessageStreamParams, "system" | "messages" | "tools" | "tool_choice">,
   signal: AbortSignal,
   gapFirst: boolean,
+  meter: ClaudeMeter,
 ): AsyncGenerator<string, Anthropic.Message> {
   const stream = getClaude().messages.stream(
     {
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: MAX_TOKENS,
       // Short answers to everyday questions: low effort keeps them quick and cheap.
       output_config: { effort: "low" },
       ...params,
@@ -480,18 +491,38 @@ async function* streamOnce(
     { signal },
   );
 
-  let gap = gapFirst;
-  for await (const event of stream) {
-    if (event.type === "content_block_delta" && event.delta.type === "text_delta" && event.delta.text) {
-      if (gap) {
-        gap = false;
-        yield "\n\n";
+  let inputTokens = 0; // Claude reports this when it starts; output only at the end
+  let finished = false;
+  let failure: unknown = null;
+  try {
+    let gap = gapFirst;
+    for await (const event of stream) {
+      if (event.type === "message_start") {
+        const usage = event.message.usage;
+        inputTokens =
+          usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
       }
-      // The chat uses this character to mark where the text ends (see /api/chat).
-      yield event.delta.text.replaceAll(END_OF_TEXT, "");
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta" && event.delta.text) {
+        if (gap) {
+          gap = false;
+          yield "\n\n";
+        }
+        // The chat uses this character to mark where the text ends (see /api/chat).
+        yield event.delta.text.replaceAll(END_OF_TEXT, "");
+      }
     }
+    const message = await stream.finalMessage();
+    meter.add(message.usage);
+    finished = true;
+    return message;
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    // Not finished: either you stopped it (Stop button, screen closed: the
+    // signal fired, or the reader went away without an error) or Claude failed.
+    if (!finished) meter.addUnfinished(inputTokens, signal.aborted || failure === null);
   }
-  return stream.finalMessage();
 }
 
 // Separates Claude's reply from the change details at the end of a /api/chat

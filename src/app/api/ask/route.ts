@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@/lib/auth";
 import { askAboutTask } from "@/lib/ai";
 import {
-  claudeErrorMessage,
+  claudeErrorResponse,
   cleanQuestion,
   cleanTask,
   errorResponse,
@@ -11,6 +11,7 @@ import {
 } from "@/lib/ai-request";
 import { nowIn } from "@/lib/dates";
 import { getTimeZone } from "@/lib/timezone";
+import { startClaudeUse } from "@/lib/usage";
 
 // POST /api/ask: the "Ask Claude" box in the task editor.
 // Body: { task: {title, category, notes, steps, ...}, question: "..." }.
@@ -18,7 +19,8 @@ import { getTimeZone } from "@/lib/timezone";
 // This is a route handler rather than a server action because a server action
 // sends back one finished answer, while this streams Claude's answer as plain
 // text, piece by piece, so the words appear on screen as Claude writes them.
-// Problems before the answer starts come back as { error } with an error status.
+// Problems before the answer starts come back as { error } with an error status
+// (429 when one of your limits is reached: see src/lib/usage.ts).
 export async function POST(request: Request) {
   try {
     await getCurrentUser(); // each question costs money: signed-in users only
@@ -32,10 +34,11 @@ export async function POST(request: Request) {
     // Read the clock only after the login check (Next.js requires that order).
     const { today } = nowIn(await getTimeZone());
 
+    const use = await startClaudeUse("ask"); // throws if a limit is reached
     const stop = stopWhenBrowserLeaves(request);
-    return await streamTextResponse(askAboutTask(task, question, today, stop.signal), stop);
+    return await streamTextResponse(askAboutTask(task, question, today, stop.signal, use.meter), stop, use);
   } catch (error) {
-    // claudeErrorMessage re-throws the "go to /login" redirect so Next.js can send it.
-    return errorResponse(claudeErrorMessage(error), 502);
+    // claudeErrorResponse re-throws the "go to /login" redirect so Next.js can send it.
+    return claudeErrorResponse(error);
   }
 }

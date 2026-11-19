@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@/lib/auth";
 import { chatAboutTasks, END_OF_TEXT } from "@/lib/ai";
 import {
-  claudeErrorMessage,
+  claudeErrorResponse,
   cleanChat,
   errorResponse,
   readBody,
@@ -12,6 +12,7 @@ import type { ChatChange } from "@/lib/chat-changes";
 import { addDays, nowIn } from "@/lib/dates";
 import { listHistory, listOpenTasks } from "@/lib/tasks";
 import { getTimeZone } from "@/lib/timezone";
+import { startClaudeUse } from "@/lib/usage";
 
 // POST /api/chat: the Chat tab. Body: { messages: [{ role, text }, ...] },
 // the conversation so far, ending with your newest message.
@@ -38,13 +39,16 @@ export async function POST(request: Request) {
     const now = nowIn(timeZone);
     const [open, history] = await Promise.all([listOpenTasks(), listHistory(addDays(now.today, -6), now.today)]);
 
+    // Counted last, just before Claude is asked, so a problem loading your
+    // tasks doesn't use up one of your messages. Throws if a limit is reached.
+    const use = await startClaudeUse("chat");
     const stop = stopWhenBrowserLeaves(request);
     const queue: ChatChange[] = [];
-    const reply = chatAboutTasks(turns, { open, history, now, timeZone }, stop.signal, queue);
-    return await streamTextResponse(withChanges(reply, queue), stop);
+    const reply = chatAboutTasks(turns, { open, history, now, timeZone }, stop.signal, queue, use.meter);
+    return await streamTextResponse(withChanges(reply, queue), stop, use);
   } catch (error) {
-    // claudeErrorMessage re-throws the "go to /login" redirect so Next.js can send it.
-    return errorResponse(claudeErrorMessage(error), 502);
+    // claudeErrorResponse re-throws the "go to /login" redirect so Next.js can send it.
+    return claudeErrorResponse(error);
   }
 }
 

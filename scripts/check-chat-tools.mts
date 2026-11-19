@@ -31,6 +31,7 @@ const jiti = createJiti(import.meta.url, {
   },
 });
 const ai = await jiti.import<typeof import("../src/lib/ai.ts")>(path.join(root, "src/lib/ai.ts"));
+const { ClaudeMeter } = await jiti.import<typeof import("../src/lib/claude.ts")>(path.join(root, "src/lib/claude.ts"));
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -116,7 +117,8 @@ console.log("\nPart 2: real requests to Claude (made-up tasks, nothing saved)\n"
 async function ask(turns: { role: "user" | "assistant"; text: string; changes?: never[] }[], tasks = snapshot) {
   const q: ChatChange[] = [];
   let text = "";
-  for await (const piece of ai.chatAboutTasks(turns as never, tasks as never, new AbortController().signal, q)) {
+  const meter = new ClaudeMeter();
+  for await (const piece of ai.chatAboutTasks(turns as never, tasks as never, new AbortController().signal, q, meter)) {
     text += piece;
   }
   return { text, queue: q };
