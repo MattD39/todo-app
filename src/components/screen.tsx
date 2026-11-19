@@ -9,6 +9,7 @@ import { TaskEditorProvider } from "./task-editor";
 import { CategoryChips } from "./category-chips";
 import { SettingsButton, SettingsButtonPlaceholder } from "./settings-menu";
 import { RefreshOnReturn } from "./refresh-on-return";
+import { ChatTabDot } from "./chat-tab-dot";
 
 export { Status } from "./status";
 
@@ -173,18 +174,21 @@ function TabBar({ current, category }: { current: Tab; category: string | null }
             tab === current ? "font-bold text-accent" : "text-muted"
           }`}
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-            className="size-[22px]"
-          >
-            {icon}
-          </svg>
+          <span className="relative">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+              className="size-[22px]"
+            >
+              {icon}
+            </svg>
+            {tab === "chat" && <ChatTabDot />}
+          </span>
           {label}
         </Link>
       ))}

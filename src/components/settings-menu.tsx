@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { signOut } from "@/app/login/actions";
-import { clearSavedChat } from "./chat";
+import { clearSavedChat } from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
 import { useBackdropClose } from "./use-backdrop-close";
 

@@ -1,23 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { applyChatChanges, undoChatChanges } from "@/app/chat-actions";
-import type { ChangeResult, ChatChange, UndoResult } from "@/lib/chat-changes";
-import { problemMessage } from "./api-problem";
+import { useEffect, useRef, useState } from "react";
+import {
+  chatViewOpened,
+  clearChat,
+  sendChat,
+  setDraft,
+  stopChat,
+  stoppedMessageOf,
+  undoChat,
+  useChat,
+  type ChatMessage,
+} from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
 import { input } from "./form-styles";
 
 // The Chat tab: talk to Claude about all your tasks.
 //
-// Each message is sent to /api/chat with the conversation so far; the server
-// adds your current task list itself and streams Claude's reply back, word by
-// word. If Claude changed tasks (or wants to), the details come at the
-// very end of the stream, after END_OF_TEXT.
-//
-// The conversation is kept in sessionStorage: it survives switching tabs, and
-// is gone when the app is closed or you sign out. It's never saved on the server.
+// This screen only shows the chat and passes on your taps. The chat itself
+// (sending, the reply, saving Claude's changes, Undo) runs in chat-store.ts,
+// so a reply keeps going while you're on another tab.
 
-const STORAGE_KEY = "chat";
 const MAX_MESSAGE = 1000;
 
 const STARTERS = [
@@ -27,111 +30,21 @@ const STARTERS = [
   "What did I finish this week?",
 ];
 
-// Marks where Claude's text ends and the change details begin (same as the server's).
-const END_OF_TEXT = "";
-
-type ChatMessage = {
-  role: "user" | "assistant";
-  text: string;
-  stopped?: boolean;
-  changes?: ChatChange[]; // changes Claude queued with this reply (not saved by Claude)
-  saving?: boolean;
-  results?: ShownResult[]; // how saving them went: the only thing that says ✓ done
-};
-
-// A saved change as shown in the chat, plus what happened when you pressed Undo.
-type ShownResult = ChangeResult & { undone?: boolean; undoError?: string };
-
-// Splits what the server sent into Claude's text and the change details.
-function splitReply(raw: string): { text: string; changes?: ChatChange[] } {
-  const at = raw.indexOf(END_OF_TEXT);
-  if (at === -1) return { text: raw };
-  try {
-    const { changes } = JSON.parse(raw.slice(at + 1)) as { changes: ChatChange[] };
-    return { text: raw.slice(0, at), changes: Array.isArray(changes) && changes.length > 0 ? changes : undefined };
-  } catch {
-    return { text: raw.slice(0, at) }; // details not fully arrived yet
-  }
-}
-
-// Forgets the conversation (called on sign-out too).
-export function clearSavedChat() {
-  try {
-    sessionStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // Storage blocked (e.g. private browsing): nothing was saved anyway.
-  }
-}
-
-function readSaved(): string | null {
-  try {
-    return sessionStorage.getItem(STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function parseSaved(raw: string | null): ChatMessage[] {
-  if (!raw) return [];
-  try {
-    const list: unknown = JSON.parse(raw);
-    if (!Array.isArray(list)) return [];
-    return list
-      .filter(
-        (m): m is ChatMessage =>
-          typeof m === "object" &&
-          m !== null &&
-          (m.role === "user" || m.role === "assistant") &&
-          typeof m.text === "string",
-      )
-      .map((m) => ({ ...m, saving: undefined })); // a save cut short by closing the app isn't still running
-  } catch {
-    return [];
-  }
-}
-
-function save(messages: ChatMessage[]) {
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-  } catch {
-    // Storage full or blocked: the chat still works, it just won't survive a tab switch.
-  }
-}
-
-const noSubscribe = () => () => {};
-
 export function Chat() {
-  // The saved conversation, read once the page is running in the browser
-  // (the server has no sessionStorage, so it draws an empty chat first).
-  const saved = useSyncExternalStore(noSubscribe, readSaved, () => null);
-  const [changed, setChanged] = useState<ChatMessage[] | null>(null);
-  // Parsed once per saved value, so each message stays the same object between redraws.
-  const savedMessages = useMemo(() => parseSaved(saved), [saved]);
-  const messages = changed ?? savedMessages;
-
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const [savingNow, setSavingNow] = useState(false); // Claude's changes are being saved: too late to stop
+  const { messages, draft, sending, savingNow, undoing, error } = useChat();
   // Try again / Edit after a stopped reply. Off for a moment right after Stop,
   // so fast clicking can't hit them by accident.
   const [retryReady, setRetryReady] = useState(true);
   const [editingStopped, setEditingStopped] = useState(false); // the box holds a stopped message being edited
   const inputRef = useRef<HTMLInputElement>(null);
-  const [undoing, setUndoing] = useState(false); // an Undo is being saved
-  // The chat as it is right now, for code that finishes after an await.
-  const messagesRef = useRef(messages);
-  useEffect(() => {
-    messagesRef.current = messages;
-  });
-  const [error, setError] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const composerRef = useRef<HTMLFormElement>(null);
 
   useKeepAboveKeyboard(composerRef);
 
-  // Leaving the Chat tab mid-reply stops Claude (what it wrote so far is kept).
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // While this screen is showing: no dot on the Chat tab. (Switching tabs
+  // hides the screen, and a reply that finishes then puts the dot up.)
+  useEffect(() => chatViewOpened(), []);
 
   // Follow the newest message: scroll to the bottom as the reply grows, but
   // only while you're at the bottom. Scroll up to read and it leaves you be;
@@ -142,159 +55,28 @@ export function Chat() {
     if (followRef.current) scrollToBottom();
   }, [followRef, messages.length, lastMessage, error]);
 
-  function update(next: ChatMessage[]) {
-    setChanged(next);
-    save(next);
-  }
-
   // The message you stopped, if the chat ends with a stopped reply (for Try again / Edit).
-  const last = messages.at(-1);
-  const stoppedMessage =
-    last?.role === "assistant" && last.stopped && messages.at(-2)?.role === "user" ? messages.at(-2)!.text : null;
+  const stoppedMessage = stoppedMessageOf(messages);
 
-  // `replaceStopped`: the message replaces a stopped one (Try again / Edit),
-  // so that stopped exchange is taken out of the chat first.
-  async function send(text: string, { replaceStopped = false } = {}) {
-    const message = text.trim();
-    if (!message || sending || undoing) return;
+  function send(text: string, options?: { replaceStopped?: boolean }) {
+    if (!text.trim() || sending || undoing) return;
     setEditingStopped(false);
-
-    const base = replaceStopped && stoppedMessage !== null ? messages.slice(0, -2) : messages;
-    const history: ChatMessage[] = [...base, { role: "user", text: message }];
-    update([...history, { role: "assistant", text: "" }]);
-    setDraft("");
-    setError(null);
-    setSending(true);
     followRef.current = true; // you just sent something: show the reply
-
-    // On a problem before Claude wrote anything, take the message back out and
-    // put it back in the box, so pressing Send again retries it. (Not after
-    // Stop: Send sits where Stop was, so a second click would send it again.)
-    const giveBack = (problem: string) => {
-      update(base);
-      setDraft(message);
-      setError(problem);
-    };
-
-    const abort = new AbortController();
-    abortRef.current = abort;
-    let reply = "";
-    // Stopped: keep your message and what Claude wrote so far; nothing is saved.
-    const markStopped = () => {
-      update([...history, { role: "assistant", text: splitReply(reply).text, stopped: true }]);
-      setRetryReady(false);
-      setTimeout(() => setRetryReady(true), 700);
-    };
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: abort.signal,
-        body: JSON.stringify({ messages: history.map(toTurn) }),
-      });
-
-      if (response.redirected || !response.ok || !response.body) {
-        giveBack(await problemMessage(response));
-        return;
-      }
-
-      // Read the reply piece by piece and show each piece as it arrives.
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        reply += decoder.decode(value, { stream: true });
-        update([...history, { role: "assistant", text: splitReply(reply).text }]);
-      }
-      reply += decoder.decode();
-      // Stop pressed just as the reply finished: still counts, so nothing is saved.
-      if (abort.signal.aborted) {
-        if (abortRef.current === abort) markStopped();
-        return;
-      }
-      const { text: finalText, changes } = splitReply(reply);
-      let answer: ChatMessage = { role: "assistant", text: finalText, ...(changes ? { changes } : {}) };
-      // Claude's changes are saved straight away; from here on Stop is off.
-      if (changes) {
-        setSavingNow(true);
-        update([...history, { ...answer, saving: true }]);
-        const results = await saveChanges(changes);
-        if (abortRef.current !== abort) return; // the chat was cleared meanwhile
-        answer = { ...answer, results };
-      }
-      update([...history, answer]);
-    } catch {
-      if (abort.signal.aborted) {
-        if (abortRef.current !== abort) return; // the chat was cleared
-        markStopped();
-        return;
-      }
-      if (reply) {
-        update([...history, { role: "assistant", text: splitReply(reply).text, stopped: true }]);
-        setError("The reply was cut off. Try asking again.");
-      } else {
-        giveBack("Couldn't reach Claude. Check your connection and try again.");
-      }
-    } finally {
-      if (abortRef.current === abort) {
-        abortRef.current = null;
-        setSending(false);
-        setSavingNow(false);
-      }
-    }
+    void sendChat(text, options);
   }
 
-  // Undoes some of the changes saved with the reply at `at` (one Undo button,
-  // or all of them for Undo all). The newest change is undone first.
-  async function undo(at: number, which: number[]) {
-    const message = messages[at];
-    const results = message?.results;
-    if (!results || undoing || sending) return;
-    const picked = which.filter((i) => results[i]?.ok && !results[i].undone).reverse();
-    if (picked.length === 0) return;
-
-    setUndoing(true);
-    const failAll = (error: string) => picked.map((): UndoResult => ({ ok: false, error }));
-    let outcome: UndoResult[];
-    try {
-      const undos = picked.map((i) => {
-        const r = results[i];
-        return r.ok ? r.undo : null;
-      });
-      const response = await undoChatChanges(undos);
-      outcome = response.results ?? failAll(response.error ?? "Nothing was undone.");
-    } catch {
-      outcome = failAll("Couldn't reach the app, so nothing was undone. Check your connection.");
-    }
-    setUndoing(false);
-
-    // Only if that reply is still there (the chat wasn't cleared meanwhile).
-    const latest = messagesRef.current;
-    if (latest[at]?.results !== results) return;
-    const updated = results.map((r, i): ShownResult => {
-      const n = picked.indexOf(i);
-      if (n === -1) return r;
-      const o = outcome[n];
-      return o.ok ? { ...r, undone: true, undoError: undefined } : { ...r, undoError: o.error };
-    });
-    update(latest.map((m, i) => (i === at ? { ...m, results: updated } : m)));
+  function undo(at: number, which: number[]) {
+    void undoChat(at, which);
   }
 
   function stop() {
-    abortRef.current?.abort();
+    stopChat();
+    setRetryReady(false);
+    setTimeout(() => setRetryReady(true), 700);
   }
 
   function clear() {
-    // Forget the reply in progress first, so it can't put the old chat back.
-    const inProgress = abortRef.current;
-    abortRef.current = null;
-    inProgress?.abort();
-    setSending(false);
-    setSavingNow(false);
-    update([]);
-    clearSavedChat();
-    setError(null);
+    clearChat();
   }
 
   return (
@@ -467,33 +249,6 @@ export function Chat() {
       )}
     </>
   );
-}
-
-// One message as sent to the server. For Claude's replies this includes what
-// happened to their changes (saved, undone, failed) and whether you stopped
-// it, so Claude knows instead of guessing.
-function toTurn(m: ChatMessage) {
-  if (m.role === "user") return { role: m.role, text: m.text };
-  const changes = m.results
-    ? m.results.map((r) =>
-        r.ok
-          ? { summary: r.summary, status: r.undone ? "undone" : "saved" }
-          : { summary: r.summary, status: "failed", error: r.error },
-      )
-    : m.changes?.map((c) => ({ summary: c.summary, status: "unknown" }));
-  return { role: m.role, text: m.text, ...(changes ? { changes } : {}), ...(m.stopped ? { stopped: true } : {}) };
-}
-
-// Saves Claude's changes and says how each one went. Never throws: a
-// problem becomes a ✗ result for every change.
-async function saveChanges(changes: ChatChange[]): Promise<ChangeResult[]> {
-  const failAll = (error: string) => changes.map((c): ChangeResult => ({ ok: false, summary: c.summary, error }));
-  try {
-    const { error, results } = await applyChatChanges(changes);
-    return results ?? failAll(error ?? "Nothing was saved.");
-  } catch {
-    return failAll("Couldn't reach the app, so nothing was saved. Check your connection.");
-  }
 }
 
 // Claude's changes under its reply. Only a ✓ line means a change was saved;
