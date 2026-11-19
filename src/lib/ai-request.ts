@@ -4,6 +4,7 @@ import { unstable_rethrow } from "next/navigation";
 import { ClaudeError, type ChangeReport, type ChatTurn, type TaskForClaude } from "./ai";
 import { MAX_CHANGES_PER_MESSAGE } from "./chat-changes";
 import { MAX_CATEGORY, MAX_NOTES, MAX_STEPS, MAX_TITLE } from "./tasks";
+import { SIGNED_OUT_MESSAGE, type ProblemCode } from "./problems";
 import { LimitError, type ClaudeUse } from "./usage";
 
 // Shared checks for everything that sends a request to Claude from the browser
@@ -84,7 +85,7 @@ export async function streamTextResponse(
         if (next.done) controller.close();
         else controller.enqueue(encoder.encode(next.value));
       } catch (error) {
-        if (!stop.signal.aborted) claudeErrorMessage(error); // logs unexpected problems
+        if (!stop.signal.aborted) claudeProblem(error); // logs problems the app owner should know about
         controller.error(error);
       }
     },
@@ -114,18 +115,14 @@ async function* savingCost(answer: AsyncGenerator<string>, use: ClaudeUse): Asyn
   }
 }
 
-// The { error } reply for a failed Claude request, with a status that says
-// what kind of problem it was. A limit gets 429 ("too many requests") and a
-// Retry-After header saying how many seconds until it's allowed again.
+// The { error, code } reply for a failed Claude request, with a status that
+// says what kind of problem it was. A limit gets 429 ("too many requests") and
+// a Retry-After header saying how many seconds until it's allowed again.
 export function claudeErrorResponse(error: unknown): Response {
-  const message = claudeErrorMessage(error); // re-throws the "go to /login" redirect
-  if (error instanceof LimitError) {
-    return Response.json(
-      { error: message },
-      { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": String(error.retryAfterSeconds) } },
-    );
-  }
-  return errorResponse(message, 502);
+  const { message, code, status } = claudeProblem(error); // re-throws the "go to /login" redirect
+  const headers: Record<string, string> = { "Cache-Control": "no-store" };
+  if (error instanceof LimitError) headers["Retry-After"] = String(error.retryAfterSeconds);
+  return Response.json({ error: message, code }, { status, headers });
 }
 
 // Fires when the browser goes away (Stop button, screen closed), so Claude
@@ -136,8 +133,9 @@ export function stopWhenBrowserLeaves(request: Request): AbortController {
   return stop;
 }
 
-export function errorResponse(message: string, status: number): Response {
-  return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
+// A request that can't be answered as it is (e.g. no title): 400 by default.
+export function errorResponse(message: string, status = 400, code: ProblemCode = "bad_input"): Response {
+  return Response.json({ error: message, code }, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 // The request body as an object (anything else becomes {}).
@@ -170,25 +168,71 @@ export function cleanQuestion(input: unknown): string {
   return text(input, MAX_QUESTION);
 }
 
-// Turns any failure into a short message for the screen.
-export function claudeErrorMessage(error: unknown): string {
+// What went wrong, as a message for the screen, a code for the browser (see
+// problems.ts) and an HTTP status for the /api routes.
+export type ClaudeProblem = { message: string; code: ProblemCode; status: number };
+
+// Turns any failure into a ClaudeProblem. Problems the app owner should know
+// about (budget used up, Claude busy or failing, a bug) go to the server log.
+export function claudeProblem(error: unknown): ClaudeProblem {
   // An expired login "throws" a redirect to /login; let Next.js carry it out.
   unstable_rethrow(error);
-  if (error instanceof ClaudeError || error instanceof LimitError) return error.message;
+  if (error instanceof LimitError) return { message: error.message, code: "limit", status: 429 };
+  if (error instanceof ClaudeError) return { message: error.message, code: "no_answer", status: 502 };
   // You pressed Stop (or closed the screen): not a problem, nothing to log.
-  if (error instanceof Anthropic.APIUserAbortError) return "Stopped.";
-  if (error instanceof Anthropic.RateLimitError) {
-    return "Claude is busy or the usage limit was reached. Try again in a bit.";
-  }
+  if (error instanceof Anthropic.APIUserAbortError) return { message: "Stopped.", code: "stopped", status: 400 };
+  // (Checked before APIError: in this SDK a connection error is a kind of APIError.)
   if (error instanceof Anthropic.APIConnectionError) {
-    return "Couldn't reach Claude. Check your connection and try again.";
+    console.warn("Couldn't connect to Claude", error.message);
+    return { message: "Couldn't reach Claude just now. Try again in a moment.", code: "unreachable", status: 502 };
   }
-  if (error instanceof Anthropic.APIError && error.status >= 500) {
-    return "Claude is having trouble right now. Try again in a bit.";
+  if (error instanceof Anthropic.APIError) {
+    // The account's monthly spend cap (a 429 that retrying won't fix), or a
+    // billing problem such as no credit left.
+    if (error.errorCode === "enforced_spend_limit_reached" || error.type === "billing_error") {
+      console.error("Claude budget used up", error.status, error.type, error.errorCode);
+      return {
+        message: "This app's monthly Claude budget is used up. The rest of the app still works.",
+        code: "budget",
+        status: 503,
+      };
+    }
+    // Overloaded (529), or the app's account hit Claude's own rate limit.
+    // (The SDK has already tried again twice by now.)
+    if (error instanceof Anthropic.RateLimitError || error.type === "overloaded_error" || error.status === 529) {
+      console.warn("Claude is busy", error.status, error.type);
+      return { message: "Claude is very busy right now. Try again in a minute.", code: "busy", status: 503 };
+    }
+    if (error.status !== undefined && error.status >= 500) {
+      console.warn("Claude is having problems", error.status, error.type);
+      return {
+        message: "Claude is having problems right now. Try again in a few minutes.",
+        code: "claude_down",
+        status: 502,
+      };
+    }
   }
-  // Wrong key, billing, a bug: details go to the server log, not the screen.
+  // Wrong key, a bad request, a bug: details go to the server log, not the screen.
   console.error("Claude request failed", error);
-  return "Something went wrong reaching Claude. Try again.";
+  return {
+    message: "Something went wrong with Claude. If it keeps happening, let the app owner know.",
+    code: "unexpected",
+    status: 500,
+  };
+}
+
+// Just the message (for the server actions).
+export function claudeErrorMessage(error: unknown): string {
+  return claudeProblem(error).message;
+}
+
+// The { error, code } reply for a signed-out visitor (401). The browser shows
+// the message and keeps whatever was typed.
+export function signedOutResponse(): Response {
+  return Response.json(
+    { error: SIGNED_OUT_MESSAGE, code: "signed_out" satisfies ProblemCode },
+    { status: 401, headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 function asRecord(input: unknown): Record<string, unknown> {

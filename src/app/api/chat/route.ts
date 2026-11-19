@@ -1,7 +1,8 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getSignedInUser } from "@/lib/auth";
 import { chatAboutTasks, END_OF_TEXT } from "@/lib/ai";
 import {
   claudeErrorResponse,
+  signedOutResponse,
   cleanChat,
   errorResponse,
   readBody,
@@ -29,7 +30,9 @@ import { startClaudeUse } from "@/lib/usage";
 // going after the route has answered.
 export async function POST(request: Request) {
   try {
-    await getCurrentUser(); // each message costs money: signed-in users only
+    // Each message costs money: signed-in users only. (The proxy turns most
+    // signed-out requests away already; this catches a login that just expired.)
+    if (!(await getSignedInUser())) return signedOutResponse();
 
     const turns = cleanChat((await readBody(request)).messages);
     if (turns.length === 0) return errorResponse("Type a message first.", 400);

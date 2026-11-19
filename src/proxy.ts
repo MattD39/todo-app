@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { SIGNED_OUT_MESSAGE, type ProblemCode } from "@/lib/problems";
 import { supabaseConfig } from "@/lib/supabase/config";
 
 // Pages anyone can open without being signed in.
@@ -49,7 +50,7 @@ export async function proxy(request: NextRequest) {
     // The browser's code calls these, not a person, so a redirect to the login
     // page would just look like a strange reply. Say "not signed in" instead.
     const denied = NextResponse.json(
-      { error: "Your login has expired. Reload the page and sign in." },
+      { error: SIGNED_OUT_MESSAGE, code: "signed_out" satisfies ProblemCode },
       { status: 401 },
     );
     response.cookies.getAll().forEach((cookie) => denied.cookies.set(cookie));

@@ -1,7 +1,8 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getSignedInUser } from "@/lib/auth";
 import { askAboutTask } from "@/lib/ai";
 import {
   claudeErrorResponse,
+  signedOutResponse,
   cleanQuestion,
   cleanTask,
   errorResponse,
@@ -23,7 +24,9 @@ import { startClaudeUse } from "@/lib/usage";
 // (429 when one of your limits is reached: see src/lib/usage.ts).
 export async function POST(request: Request) {
   try {
-    await getCurrentUser(); // each question costs money: signed-in users only
+    // Each question costs money: signed-in users only. (The proxy turns most
+    // signed-out requests away already; this catches a login that just expired.)
+    if (!(await getSignedInUser())) return signedOutResponse();
 
     const input = await readBody(request);
     const task = cleanTask(input.task);
