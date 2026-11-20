@@ -94,6 +94,7 @@ enum ClaudeFeature {
   suggest_steps
   ask
   chat
+  mcp_change // a change made by Claude through the MCP server (no Claude cost: counted, not priced)
 }
 
 // One row each time someone uses a Claude feature, so the server can enforce

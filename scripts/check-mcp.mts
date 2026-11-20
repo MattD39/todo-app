@@ -14,6 +14,9 @@
 // Part 3 checks safety: the test user can't see or change a second made-up
 //   person's task, even knowing its real id. The database rules hold on this
 //   route too.
+// Part 4 checks the change limits: 20 changes a minute and 200 a day per
+//   person; reading is never limited, and changes refused for bad input don't
+//   count.
 // Only the two made-up people's rows are created and deleted (at the start
 // and the end); your own tasks are never touched or shown. Exits with an
 // error if any check fails.
@@ -167,7 +170,19 @@ async function cleanUp() {
   for (const user of [TEST_USER, OTHER_USER]) {
     await owner.query(`DELETE FROM "Task" WHERE "userId" = $1`, [user]);
     await owner.query(`DELETE FROM "Category" WHERE "userId" = $1`, [user]);
+    await owner.query(`DELETE FROM "ClaudeUsage" WHERE "userId" = $1`, [user]);
   }
+}
+// The test user's counted uses (for the change limits in Part 4).
+async function resetUsage() {
+  await owner.query(`DELETE FROM "ClaudeUsage" WHERE "userId" = $1`, [TEST_USER]);
+}
+async function addPastUses(count: number, feature: string, costUsd = 0) {
+  await owner.query(
+    `INSERT INTO "ClaudeUsage" ("id", "userId", "feature", "startedAt", "costUsd")
+     SELECT gen_random_uuid(), $1, $2::"ClaudeFeature", now() - interval '61 seconds', $3 FROM generate_series(1, $4)`,
+    [TEST_USER, feature, costUsd, count],
+  );
 }
 
 try {
@@ -283,6 +298,42 @@ try {
     "the test user's lists never include another person's task",
     !list.text.includes(theirs.id) && !list.text.includes("Someone else") && !finishedList.text.includes(theirs.id),
   );
+
+  // ─── Part 4: change limits ─────────────────────────────────────────────────
+  console.log("\nPart 4: change limits (20 a minute, 200 a day; reading unlimited)\n");
+
+  await resetUsage();
+  for (let i = 0; i < 3; i++) await call("add_task", { title: "Refused", due_time: "09:00" });
+  const { rows: counted } = await owner.query(`SELECT count(*)::int AS n FROM "ClaudeUsage" WHERE "userId" = $1`, [TEST_USER]);
+  check("changes refused for bad input don't count towards the limits", counted[0].n === 0, `counted ${counted[0].n}`);
+
+  let allowed = 0;
+  for (let i = 1; i <= 20; i++) {
+    const r = await call("add_task", { title: `Limit ${i}` });
+    if (!r.isError) allowed++;
+  }
+  const twentyFirst = await call("add_task", { title: "Limit 21" });
+  check(
+    "20 changes in a minute are fine; the 21st is refused with a real wait",
+    allowed === 20 && twentyFirst.isError && /Wait about \d+ seconds?/.test(twentyFirst.text),
+    `allowed ${allowed}; 21st: ${twentyFirst.text}`,
+  );
+  const stillReads = await call("list_open_tasks");
+  check("reading still works after the change limit is reached", !stillReads.isError && /Limit 20/.test(stillReads.text));
+
+  await resetUsage();
+  await addPastUses(200, "mcp_change");
+  const dayFull = await call("add_task", { title: "One too many" });
+  check(
+    "after 200 changes today, the next is refused until midnight",
+    dayFull.isError && /today's 200 changes through Claude\. More at midnight/.test(dayFull.text),
+    dayFull.text,
+  );
+
+  await resetUsage();
+  await addPastUses(1, "chat", 0.15); // the Chat tab's daily spending cap is used up
+  const capped = await call("add_task", { title: "Spending cap test" });
+  check("the Chat tab's spending cap doesn't block changes through Claude (they cost nothing)", !capped.isError, capped.text);
 } finally {
   await cleanUp();
   const { rows } = await owner.query(`SELECT count(*)::int AS n FROM "Task" WHERE "userId" IN ($1, $2)`, [

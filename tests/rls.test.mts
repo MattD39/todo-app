@@ -19,6 +19,11 @@ const NOBODY = "00000000-0000-4000-8000-000000000000"; // a made-up user with no
 
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 let you: string | null = null; // the real user who owns the tasks in the database
+// If there are no tasks at all (e.g. a fresh start), "you" is a made-up user
+// instead, who gets one task at the start of each test (undone with the rest),
+// so these tests never depend on what happens to be in the database.
+const MADE_UP_YOU = "00000000-0000-4000-8000-000000000002";
+let youAreMadeUp = false;
 
 before(async () => {
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL is missing — run this with: npm run test:rls");
@@ -26,6 +31,10 @@ before(async () => {
   // As the owner (which skips the rules), find whose tasks are in the database.
   const { rows } = await client.query(`SELECT "userId" FROM "Task" ORDER BY "createdAt" DESC LIMIT 1`);
   you = rows[0]?.userId ?? null;
+  if (!you) {
+    you = MADE_UP_YOU;
+    youAreMadeUp = true;
+  }
 });
 
 after(async () => {
@@ -36,6 +45,12 @@ after(async () => {
 async function inThrowawayTransaction(work: () => Promise<void>) {
   await client.query("BEGIN");
   try {
+    if (youAreMadeUp) {
+      await client.query(
+        `INSERT INTO "Task" (id, "userId", title, "updatedAt") VALUES (gen_random_uuid(), $1, 'Your test task', now())`,
+        [you],
+      );
+    }
     await work();
   } finally {
     await client.query("ROLLBACK");

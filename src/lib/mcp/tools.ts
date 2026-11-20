@@ -29,6 +29,7 @@ import {
   type TaskDTO,
 } from "../tasks";
 import { getTimeZone } from "../timezone";
+import { countMcpChange, LimitError } from "../usage";
 import { asPassOwner } from "./auth";
 
 // The tools Claude can use through the MCP server. Each one runs as the
@@ -409,6 +410,14 @@ async function openTask(id: string): Promise<TaskDTO | string> {
 // Saves one change the same way the Chat tab does, and says how it went,
 // with the task as it is now.
 async function save(change: ChatChange): Promise<CallToolResult> {
+  // The change limits (20 a minute, 200 a day per person). Only changes that
+  // got this far count: ones refused for bad input above don't.
+  try {
+    await countMcpChange();
+  } catch (error) {
+    if (error instanceof LimitError) return text(`Not saved: ${error.message}`, true);
+    throw error;
+  }
   const [result] = await applyChanges([change]);
   if (!result.ok)
     return text(`Not saved: ${result.summary}. ${result.error}`, true);

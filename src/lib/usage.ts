@@ -20,12 +20,18 @@ import type { ClaudeFeature } from "@/generated/prisma/enums";
 
 export type { ClaudeFeature };
 
-type Limit = { perMinute: number; perDay: number; name: string };
+// costsMoney: false for changes made through the MCP server (Claude does the
+// thinking on the person's own Claude account), so the daily spending cap
+// doesn't apply to them and they never add to it.
+type Limit = { perMinute: number; perDay: number; name: string; costsMoney: boolean };
 
 export const LIMITS: Record<ClaudeFeature, Limit> = {
-  suggest_steps: { perMinute: 5, perDay: 30, name: "step suggestions" },
-  ask: { perMinute: 5, perDay: 30, name: "Ask Claude questions" },
-  chat: { perMinute: 6, perDay: 40, name: "chat messages" },
+  suggest_steps: { perMinute: 5, perDay: 30, name: "step suggestions", costsMoney: true },
+  ask: { perMinute: 5, perDay: 30, name: "Ask Claude questions", costsMoney: true },
+  chat: { perMinute: 6, perDay: 40, name: "chat messages", costsMoney: true },
+  // A safety net in case a Claude chat goes wrong and keeps changing tasks.
+  // Reading through the MCP server isn't limited.
+  mcp_change: { perMinute: 20, perDay: 200, name: "changes through Claude", costsMoney: false },
 };
 
 // Most one person can spend on Claude in a day, in US dollars, all features
@@ -61,6 +67,14 @@ export async function startClaudeUse(feature: ClaudeFeature): Promise<ClaudeUse>
   return startClaudeUseFor(user.id, await getTimeZone(), feature);
 }
 
+// One change Claude is about to make through the MCP server: checks the
+// change limits (20 a minute, 200 a day) and counts it. Throws LimitError if
+// a limit has been reached (nothing is counted then). There's no Claude cost
+// to save afterwards, so the row is never "finished" and always counts.
+export async function countMcpChange(): Promise<void> {
+  await startClaudeUse("mcp_change");
+}
+
 // The work behind startClaudeUse, for a user who has already been checked.
 // Only for startClaudeUse and the checks in scripts/check-limits.mts (which
 // can't sign in): userId must come from a verified login, never from input.
@@ -78,6 +92,7 @@ export async function startClaudeUseFor(userId: string, timeZone: string, featur
     // the person's time zone (Postgres knows the same names as the browser).
     // A use counts towards the daily limit unless Claude failed before doing
     // anything (finished with nothing read or written), e.g. Claude was busy.
+    // (MCP changes are never "finished", so they always count: see countMcpChange.)
     const [counts] = await tx.$queryRaw<UsageCounts[]>`
       WITH day AS (
         SELECT (date_trunc('day', now() AT TIME ZONE ${timeZone}) AT TIME ZONE ${timeZone}) AS starts,
@@ -161,7 +176,7 @@ export function checkLimits(limit: Limit, counts: UsageCounts): void {
   if (counts.today >= limit.perDay) {
     throw new LimitError(`You've used today's ${limit.perDay} ${limit.name}. More at midnight.`, counts.dayEndsIn);
   }
-  if (counts.spentToday >= DAILY_SPEND_CAP_USD) {
+  if (limit.costsMoney && counts.spentToday >= DAILY_SPEND_CAP_USD) {
     throw new LimitError("You've reached today's Claude limit. It resets at midnight.", counts.dayEndsIn);
   }
 }
