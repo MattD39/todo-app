@@ -7,6 +7,7 @@ import { clearSavedChat } from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
 import { RecentlyDeletedRow, RecentlyDeletedScreen, useRecentlyDeleted, type ConfirmRequest } from "./recently-deleted";
 import { useBackdropClose } from "./use-backdrop-close";
+import { useSwipeToClose } from "./use-swipe-to-close";
 
 // The gear button in each screen's header, and the settings sheet it opens.
 // The sheet holds your account (Sign out, Sign out of all devices) and
@@ -49,6 +50,11 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
   const [view, setView] = useState<"settings" | "bin">("settings");
   const [cameBack, setCameBack] = useState(false);
   const backdropClose = useBackdropClose(onClose);
+  // Swipe down to close (iPhone), on either screen. On Settings the panel
+  // scrolls; on Recently deleted only the list in the middle does.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const binScrollRef = useRef<HTMLDivElement>(null);
+  useSwipeToClose(panelRef, view === "bin" ? binScrollRef : panelRef, onClose, view);
 
   function openBin() {
     bin.clearNote();
@@ -83,13 +89,19 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
         {view === "bin" ? (
           // A fixed-height panel: header at the top, the list scrolls in the
           // middle, and the Restore all / Empty bin bar stays at the bottom.
-          <div className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink">
-            <RecentlyDeletedScreen bin={bin} onBack={backToSettings} />
+          <div
+            ref={panelRef}
+            className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink"
+          >
+            <RecentlyDeletedScreen bin={bin} onBack={backToSettings} scrollRef={binScrollRef} />
           </div>
         ) : (
-          <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
-            <div className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
-            <div className="mb-3 flex items-center justify-between gap-2">
+          <div
+            ref={panelRef}
+            className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink"
+          >
+            <div data-sheet-handle className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
+            <div data-sheet-handle className="mb-3 flex items-center justify-between gap-2">
               <h2 id="settings-title" className="font-display text-[1.2rem] font-bold">
                 Settings
               </h2>

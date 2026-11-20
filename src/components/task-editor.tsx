@@ -20,6 +20,7 @@ import { dateTimeFix, fieldLabel, input, segment } from "./form-styles";
 import { StepsEditor } from "./steps-editor";
 import { useBackdropClose } from "./use-backdrop-close";
 import { useFitVisibleScreen } from "./use-fit-visible-screen";
+import { useSwipeToClose } from "./use-swipe-to-close";
 
 // Everything for adding and editing tasks:
 //   • TaskEditorProvider — wraps a screen; owns "is the editor open, and for which task?"
@@ -292,6 +293,9 @@ function TaskSheet({
   }, [isNew]);
   useFitVisibleScreen(dialogRef);
   const backdropClose = useBackdropClose(onClose);
+  // Swipe down to close (iPhone): the panel both slides and scrolls.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useSwipeToClose(panelRef, panelRef, onClose);
 
   // Enter when you're not in any box saves the task, like the Add / Save
   // button (e.g. Enter in the title closes it; Enter again saves). (With nothing selected, the browser sends keys to the page, not
@@ -334,10 +338,13 @@ function TaskSheet({
       className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
     >
       {/* scroll-pt keeps a box you tap from hiding under the sticky top bar. */}
-      <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] scroll-pt-20 overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
+      <div
+        ref={panelRef}
+        className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] scroll-pt-20 overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink"
+      >
         {/* The top bar stays put while the form scrolls under it, iPhone-style:
             Close on the left, Add / Save on the right, always in reach. */}
-        <div className="sticky top-0 z-10 -mx-1 mb-2 bg-bg px-1 pt-2.5 pb-2">
+        <div data-sheet-handle className="sticky top-0 z-10 -mx-1 mb-2 bg-bg px-1 pt-2.5 pb-2">
           <div className="mx-auto mb-2 h-1 w-10 rounded bg-line" aria-hidden />
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
             <button type="button" onClick={onClose} className="justify-self-start py-1.5 pr-3 text-muted">

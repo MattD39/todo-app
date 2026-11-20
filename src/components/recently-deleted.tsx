@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type RefObject } from "react";
 import { deleteForever, emptyRecentlyDeleted, getRecentlyDeleted, restoreAll, restoreTask } from "@/app/task-actions";
 import type { BinItem } from "@/lib/tasks";
 
@@ -178,7 +178,15 @@ export function RecentlyDeletedRow({
 
 // The full list: a header with the way back, the list (it scrolls), and the
 // Restore all / Empty bin bar, which stays at the bottom however far you scroll.
-export function RecentlyDeletedScreen({ bin, onBack }: { bin: RecentlyDeletedState; onBack: () => void }) {
+export function RecentlyDeletedScreen({
+  bin,
+  onBack,
+  scrollRef,
+}: {
+  bin: RecentlyDeletedState;
+  onBack: () => void;
+  scrollRef: RefObject<HTMLDivElement | null>; // the list, which scrolls (for swipe down to close)
+}) {
   const backRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     backRef.current?.focus({ preventScroll: true });
@@ -189,7 +197,8 @@ export function RecentlyDeletedScreen({ bin, onBack }: { bin: RecentlyDeletedSta
 
   return (
     <>
-      <div className="flex-none px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-2">
+      {/* The header is the handle: swiping down from it closes the sheet. */}
+      <div data-sheet-handle className="flex-none px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-2">
         <div className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
           <button
@@ -206,7 +215,10 @@ export function RecentlyDeletedScreen({ bin, onBack }: { bin: RecentlyDeletedSta
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[max(16px,env(safe-area-inset-left,0px))] pb-3">
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[max(16px,env(safe-area-inset-left,0px))] pb-3"
+      >
         {bin.note && (
           <p
             role={bin.note.isError ? "alert" : "status"}
