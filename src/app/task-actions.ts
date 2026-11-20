@@ -13,6 +13,7 @@ import {
   deleteTickWithCopy,
   emptyBin,
   listRecentlyDeleted,
+  restoreAllFromBin,
   restoreFromBin,
   restoreDeletedTask,
   restoreDeletedTick,
@@ -170,6 +171,10 @@ export async function getRecentlyDeleted(): Promise<{ error: string | null; item
 export async function restoreTask(id: unknown): Promise<ActionResult & { value?: string }> {
   if (typeof id !== "string") return { error: "Something went wrong." };
   return run("restore", () => restoreFromBin(id));
+}
+
+export async function restoreAll(): Promise<ActionResult & { value?: { restored: number; failed: number } }> {
+  return run("restore", () => restoreAllFromBin());
 }
 
 export async function deleteForever(id: unknown): Promise<ActionResult> {

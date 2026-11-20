@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import { signOut, signOutEverywhere } from "@/app/login/actions";
 import { clearSavedChat } from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
-import { RecentlyDeleted, type ConfirmRequest } from "./recently-deleted";
+import { RecentlyDeletedRow, RecentlyDeletedScreen, useRecentlyDeleted, type ConfirmRequest } from "./recently-deleted";
 import { useBackdropClose } from "./use-backdrop-close";
 
 // The gear button in each screen's header, and the settings sheet it opens.
@@ -43,7 +43,21 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
   const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
   // An "are you sure?" asked by Recently deleted (Delete forever, Empty bin).
   const [binConfirm, setBinConfirm] = useState<ConfirmRequest | null>(null);
+  const bin = useRecentlyDeleted(setBinConfirm);
+  // Which screen the sheet shows: Settings, or the Recently deleted list.
+  // `cameBack`: returned from the list, so focus goes back to its row.
+  const [view, setView] = useState<"settings" | "bin">("settings");
+  const [cameBack, setCameBack] = useState(false);
   const backdropClose = useBackdropClose(onClose);
+
+  function openBin() {
+    bin.clearNote();
+    setView("bin");
+  }
+  function backToSettings() {
+    setCameBack(true);
+    setView("settings");
+  }
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -55,56 +69,71 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
         ref={dialogRef}
         aria-labelledby="settings-title"
         onClose={onClose}
+        // Escape on the Recently deleted list goes back to Settings first.
+        onCancel={(e) => {
+          if (view === "bin") {
+            e.preventDefault();
+            backToSettings();
+          }
+        }}
         // A tap on the dimmed area (outside the panel) closes it.
         {...backdropClose}
         className="m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-[rgba(10,16,12,.45)]"
       >
-        <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
-          <div className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 id="settings-title" className="font-display text-[1.2rem] font-bold">
-              Settings
-            </h2>
-            <button type="button" onClick={onClose} className="p-1.5 text-muted">
-              Close
-            </button>
+        {view === "bin" ? (
+          // A fixed-height panel: header at the top, the list scrolls in the
+          // middle, and the Restore all / Empty bin bar stays at the bottom.
+          <div className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink">
+            <RecentlyDeletedScreen bin={bin} onBack={backToSettings} />
           </div>
+        ) : (
+          <div className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[92%] w-full max-w-[640px] overflow-y-auto overscroll-contain rounded-t-[18px] bg-bg px-[max(16px,env(safe-area-inset-left,0px))] pt-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] text-ink">
+            <div className="mx-auto mb-2.5 h-1 w-10 rounded bg-line" aria-hidden />
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 id="settings-title" className="font-display text-[1.2rem] font-bold">
+                Settings
+              </h2>
+              <button type="button" onClick={onClose} className="p-1.5 text-muted">
+                Close
+              </button>
+            </div>
 
-          <section aria-labelledby="account-heading" className="rounded-[14px] border border-line bg-surface p-4">
-            <h3
-              id="account-heading"
-              className="font-mono text-[0.74rem] font-medium tracking-[0.08em] text-muted uppercase"
-            >
-              Account
-            </h3>
-            <p className="mt-1.5 text-[0.95rem]">
-              Signed in as <b className="[overflow-wrap:anywhere]">{email}</b>
-            </p>
-            {/* The same sign-out form as before; the button asks "are you sure?"
-                first, and a yes submits it. The server then sends you to /login. */}
-            <form ref={signOutForm} action={signOut}>
-              <SignOutButton onClick={() => setConfirming("this")} />
-            </form>
-            <button
-              type="button"
-              onClick={() => {
-                setSignOutAllError(null);
-                setConfirming("all");
-              }}
-              disabled={signingOutAll}
-              className="mt-2.5 w-full rounded-xl border border-line bg-bg p-3 font-bold text-high disabled:opacity-50"
-            >
-              {signingOutAll ? "Signing out everywhere…" : "Sign out of all devices"}
-            </button>
-            {signOutAllError && (
-              <p role="alert" className="mt-2 text-[0.9rem] text-high">
-                {signOutAllError}
+            <section aria-labelledby="account-heading" className="rounded-[14px] border border-line bg-surface p-4">
+              <h3
+                id="account-heading"
+                className="font-mono text-[0.74rem] font-medium tracking-[0.08em] text-muted uppercase"
+              >
+                Account
+              </h3>
+              <p className="mt-1.5 text-[0.95rem]">
+                Signed in as <b className="[overflow-wrap:anywhere]">{email}</b>
               </p>
-            )}
-          </section>
+              {/* The same sign-out form as before; the button asks "are you sure?"
+                first, and a yes submits it. The server then sends you to /login. */}
+              <form ref={signOutForm} action={signOut}>
+                <SignOutButton onClick={() => setConfirming("this")} />
+              </form>
+              <button
+                type="button"
+                onClick={() => {
+                  setSignOutAllError(null);
+                  setConfirming("all");
+                }}
+                disabled={signingOutAll}
+                className="mt-2.5 w-full rounded-xl border border-line bg-bg p-3 font-bold text-high disabled:opacity-50"
+              >
+                {signingOutAll ? "Signing out everywhere…" : "Sign out of all devices"}
+              </button>
+              {signOutAllError && (
+                <p role="alert" className="mt-2 text-[0.9rem] text-high">
+                  {signOutAllError}
+                </p>
+              )}
+            </section>
 
-          <RecentlyDeleted askConfirm={setBinConfirm} />
-        </div>
+            <RecentlyDeletedRow bin={bin} onOpen={openBin} focusOnMount={cameBack} />
+          </div>
+        )}
       </dialog>
 
       {/* Kept outside the sheet's <dialog>: React passes a nested dialog's

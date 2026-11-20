@@ -527,6 +527,26 @@ export async function restoreFromBin(id: string): Promise<string> {
   });
 }
 
+// Restore all: puts every task in the bin back. One at a time, each in its
+// own transaction, so a long list never runs into the database's time limit
+// for one transaction, and one that can't come back doesn't stop the rest.
+// Returns how many came back and how many didn't.
+export async function restoreAllFromBin(): Promise<{ restored: number; failed: number }> {
+  const items = await listRecentlyDeleted();
+  let restored = 0;
+  let failed = 0;
+  for (const item of items) {
+    try {
+      await restoreFromBin(item.id);
+      restored++;
+    } catch (error) {
+      if (!(error instanceof TaskError)) console.error("Restoring one task failed", error);
+      failed++;
+    }
+  }
+  return { restored, failed };
+}
+
 // Delete forever: removes one copy from the bin for good.
 export async function deleteFromBin(id: string): Promise<void> {
   await getCurrentUser(); // signed-out visitors are turned away before anything else

@@ -263,6 +263,30 @@ function TaskSheet({
   useFitVisibleScreen(dialogRef);
   const backdropClose = useBackdropClose(onClose);
 
+  // Enter when you're not in any box saves the task, like the Add / Save
+  // button (e.g. Enter in the title closes it; Enter again saves). (With nothing selected, the browser sends keys to the page, not
+  // to the form, so this listens on the whole page while the sheet is open.)
+  // Left alone: a box you type in (the form's onKeyDown handles those),
+  // buttons and links (Enter presses them), and the time another pop-up,
+  // like the sign-in box, is open on top of the sheet.
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Enter" || e.repeat || e.isComposing || e.defaultPrevented || saving) return;
+      const dialog = dialogRef.current;
+      if (!dialog?.open) return;
+      if ([...document.querySelectorAll("dialog[open]")].some((d) => d !== dialog)) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (target !== document.body && !dialog.contains(target)) return;
+      if (target.closest("input, textarea, select, button, a[href], summary, [contenteditable]")) return;
+      e.preventDefault();
+      formRef.current?.requestSubmit();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [saving]);
+
   return (
     <dialog
       ref={dialogRef}
@@ -310,10 +334,12 @@ function TaskSheet({
         </div>
 
         <form
+          ref={formRef}
           id="task-form"
           className="flex flex-col gap-3.5"
-          // Enter in a one-line box just closes the keyboard: saving is the Add /
-          // Save button (or Ctrl/⌘+Enter on a computer). Boxes that use Enter
+          // Enter in a one-line box just closes the keyboard (Done on the iPhone);
+          // a second Enter, now outside any box, saves (see onKeyDown above).
+          // Ctrl/⌘+Enter saves from anywhere on a computer. Boxes that use Enter
           // themselves (Add step, Ask Claude) handle it first and are left alone;
           // Notes is a <textarea>, where Enter starts a new line as usual.
           onKeyDown={(e) => {
