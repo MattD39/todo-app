@@ -81,8 +81,11 @@ async function countAll() {
     completions: await count(`SELECT 1 FROM "TaskCompletion"`),
     categories: await count(`SELECT 1 FROM "Category"`),
     claudeUsage: await count(`SELECT 1 FROM "ClaudeUsage"`),
+    recentlyDeleted: await count(`SELECT 1 FROM "RecentlyDeleted"`),
   };
 }
+
+const NOTHING = { tasks: 0, steps: 0, completions: 0, categories: 0, claudeUsage: 0, recentlyDeleted: 0 };
 
 // The database must refuse this statement (by default: because of the row
 // rules). A savepoint keeps the refusal from spoiling the rest of the transaction.
@@ -124,14 +127,14 @@ async function createOtherUsersTask(): Promise<string> {
 test("a user with no rows sees nothing, even with no userId filter", async () => {
   await inThrowawayTransaction(async () => {
     await actAs(NOBODY);
-    assert.deepEqual(await countAll(), { tasks: 0, steps: 0, completions: 0, categories: 0, claudeUsage: 0 });
+    assert.deepEqual(await countAll(), NOTHING);
   });
 });
 
 test("if the app forgets to say who is signed in, nothing is visible", async () => {
   await inThrowawayTransaction(async () => {
     await actAs(null);
-    assert.deepEqual(await countAll(), { tasks: 0, steps: 0, completions: 0, categories: 0, claudeUsage: 0 });
+    assert.deepEqual(await countAll(), NOTHING);
   });
 });
 
@@ -259,6 +262,64 @@ test("you can't un-count, back-date or hand over your own Claude usage", async (
   });
 });
 
+// ─── Recently deleted (the bin in Settings) ──────────────────────────────────
+
+const BIN_COPY = JSON.stringify({ title: "Private gift idea" });
+
+test("another user's recently deleted tasks stay invisible, and you can't remove or add theirs", async () => {
+  await inThrowawayTransaction(async () => {
+    await actAsOwner();
+    const { rows } = await client.query(
+      `INSERT INTO "RecentlyDeleted" (id, "userId", copy) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
+      [OTHER_USER, BIN_COPY],
+    );
+    const theirs = rows[0].id;
+
+    await actAs(NOBODY); // "you": a made-up user
+    assert.equal(await count(`SELECT 1 FROM "RecentlyDeleted"`), 0, "their bin is invisible");
+    const deleted = await client.query(`DELETE FROM "RecentlyDeleted" WHERE id = $1`, [theirs]);
+    assert.equal(deleted.rowCount, 0, "their item can't be removed (Delete forever / Empty bin)");
+    await assertRefused(`INSERT INTO "RecentlyDeleted" (id, "userId", copy) VALUES (gen_random_uuid(), $1, $2)`, [
+      OTHER_USER,
+      BIN_COPY,
+    ]);
+
+    await actAsOwner();
+    assert.equal(await count(`SELECT 1 FROM "RecentlyDeleted" WHERE id = $1`, [theirs]), 1, "theirs is untouched");
+  });
+});
+
+test("you can bin and remove your own, but not back-date, edit or hand one over", async () => {
+  await inThrowawayTransaction(async () => {
+    await actAs(NOBODY);
+    // What the app does: only id, owner and copy; the time comes from the database.
+    const { rows } = await client.query(
+      `INSERT INTO "RecentlyDeleted" (id, "userId", copy) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
+      [NOBODY, BIN_COPY],
+    );
+    const id = rows[0].id;
+    const denied = /permission denied/;
+    assert.equal(await count(`SELECT 1 FROM "RecentlyDeleted"`), 1, "you see your own");
+
+    await assertRefused(
+      `INSERT INTO "RecentlyDeleted" (id, "userId", copy, "deletedAt") VALUES (gen_random_uuid(), $1, $2, now())`,
+      [NOBODY, BIN_COPY],
+      denied,
+    );
+    await assertRefused(`UPDATE "RecentlyDeleted" SET "deletedAt" = now() WHERE id = $1`, [id], denied);
+    await assertRefused(`UPDATE "RecentlyDeleted" SET copy = '{}' WHERE id = $1`, [id], denied);
+    await assertRefused(`UPDATE "RecentlyDeleted" SET "userId" = $1 WHERE id = $2`, [OTHER_USER, id], denied);
+    await assertRefused(
+      `INSERT INTO "RecentlyDeleted" (id, "userId", copy) VALUES (gen_random_uuid(), $1, '[1, 2]')`,
+      [NOBODY],
+      /check constraint/,
+    );
+
+    const removed = await client.query(`DELETE FROM "RecentlyDeleted" WHERE id = $1`, [id]);
+    assert.equal(removed.rowCount, 1, "Delete forever works on your own");
+  });
+});
+
 test("the switch to app_user ends with the transaction", async () => {
   await inThrowawayTransaction(async () => {
     await actAs(NOBODY);
@@ -272,7 +333,7 @@ test("the public web API (Supabase Data API) is still locked", async () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   assert.ok(url && key, "Supabase URL or publishable key is missing from .env.local");
-  for (const table of ["Task", "Subtask", "TaskCompletion", "Category", "ClaudeUsage"]) {
+  for (const table of ["Task", "Subtask", "TaskCompletion", "Category", "ClaudeUsage", "RecentlyDeleted"]) {
     const response: Response = await fetch(`${url}/rest/v1/${table}?select=*`, { headers: { apikey: key } });
     assert.equal(response.status, 401, table);
   }

@@ -89,6 +89,22 @@ model TaskCompletion {
   @@index([taskId, completedOn])
 }
 
+// The bin behind Settings → Recently deleted. Deleting a task really removes
+// it (with its steps and history) from the tables above, so nothing else —
+// lists, calendar, Chat, Claude through the MCP server — can ever see it.
+// A copy of it is kept here instead, for up to 30 days, so it can be put back.
+// id = the deleted task's own id, so it comes back with the same id.
+model RecentlyDeleted {
+  id        String   @id @db.Uuid
+  userId    String   @db.Uuid
+  // Everything needed to put it back: the DeletedTask shape in src/lib/tasks.ts.
+  copy      Json
+  // Set by the database clock when it's binned (the app can't choose it).
+  deletedAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([userId, deletedAt])
+}
+
 // The Claude features, for counting each person's use (see src/lib/usage.ts).
 enum ClaudeFeature {
   suggest_steps
