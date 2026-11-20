@@ -371,6 +371,9 @@ export async function undoCompletion(completionId: string): Promise<void> {
   });
 }
 
+// Deletes a task for good: NOT kept in Recently deleted. Only for undoing a
+// task Claude added in Chat (undoing an add, not deleting a task of yours).
+// Deleting a task yourself goes through deleteTaskWithCopy, which bins it.
 export async function deleteTask(id: string): Promise<void> {
   await getCurrentUser(); // signed-out visitors are turned away before anything else
   if (!isUuid(id)) throw new TaskError("That task doesn't exist.");
@@ -428,7 +431,7 @@ export async function deleteTaskWithCopy(id: string): Promise<DeletedTask> {
     });
     const { count } = await tx.task.deleteMany({ where: { id: row.id, userId } });
     if (count === 0) throw new TaskError("That task doesn't exist.");
-    return {
+    const copy: DeletedTask = {
       id: row.id,
       title: row.title,
       notes: row.notes,
@@ -449,7 +452,41 @@ export async function deleteTaskWithCopy(id: string): Promise<DeletedTask> {
       })),
       ticks: row.completions.map(tickCopy),
     };
+    // In the same transaction: the task is never gone without its copy
+    // being safely in the bin.
+    await putInBin(tx, userId, copy);
+    return copy;
   });
+}
+
+// ─── Recently deleted (the bin in Settings) ──────────────────────────────────
+// Every task you delete (swipe, or Delete in the task editor) is kept here as
+// a copy for BIN_DAYS days, then cleared out. Not binned: one tick of a
+// repeating task, and a task Claude added that you Undo in Chat (deleteTask).
+
+export const BIN_DAYS = 30;
+
+// Puts a deleted task's copy in the bin, and clears out your own copies that
+// are past their 30 days while it's here.
+async function putInBin(tx: Db, userId: string, copy: DeletedTask) {
+  await clearOldFromBin(tx, userId);
+  // A task deleted again after a restore replaces its old copy.
+  await tx.recentlyDeleted.deleteMany({ where: { id: copy.id, userId } });
+  // Written by hand, like ClaudeUsage in usage.ts: app_user may only fill in
+  // these three columns (the database clock sets deletedAt), and the database
+  // refuses Prisma's own create here.
+  await tx.$executeRaw`
+    INSERT INTO "RecentlyDeleted" ("id", "userId", "copy")
+    VALUES (${copy.id}::uuid, ${userId}::uuid, ${JSON.stringify(copy)}::jsonb)`;
+}
+
+async function clearOldFromBin(tx: Db, userId: string) {
+  await tx.recentlyDeleted.deleteMany({ where: { userId, deletedAt: { lt: binCutoff() } } });
+}
+
+// Copies deleted before this moment are past their 30 days.
+function binCutoff(): Date {
+  return new Date(Date.now() - BIN_DAYS * 24 * 60 * 60 * 1000);
 }
 
 // Puts a deleted task back from its copy. The copy comes back from the
@@ -503,6 +540,8 @@ export async function restoreDeletedTask(input: unknown): Promise<void> {
         completions: { create: ticks.map(cleanTickFields) },
       },
     });
+    // It's back, so it's no longer in Recently deleted.
+    await tx.recentlyDeleted.deleteMany({ where: { id, userId } });
   });
 }
 

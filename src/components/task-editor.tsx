@@ -478,7 +478,7 @@ function DeleteButton({ taskId, onDeleted }: { taskId: string; onDeleted: () => 
         setArmed(false);
       } else {
         onDeleted();
-        toast("Task deleted");
+        toast("Deleted · it's in Settings → Recently deleted");
       }
     });
   }

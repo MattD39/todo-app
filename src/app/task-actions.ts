@@ -8,7 +8,6 @@ import {
   addSteps,
   createTask,
   deleteStep,
-  deleteTask,
   deleteTaskWithCopy,
   deleteTickWithCopy,
   restoreDeletedTask,
@@ -117,7 +116,11 @@ export async function undoTick(completionId: unknown): Promise<ActionResult> {
 
 export async function removeTask(id: unknown): Promise<ActionResult> {
   if (typeof id !== "string") return { error: "Something went wrong." };
-  return run("delete", () => deleteTask(id));
+  // Kept in Recently deleted, the same as swipe to delete (the copy it
+  // returns isn't needed here: the editor has no Undo bar).
+  return run("delete", async () => {
+    await deleteTaskWithCopy(id);
+  });
 }
 
 // Swipe to delete: a whole task, or one tick of a repeating task (one entry
