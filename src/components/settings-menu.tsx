@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useFormStatus } from "react-dom";
-import { signOut } from "@/app/login/actions";
+import { signOut, signOutEverywhere } from "@/app/login/actions";
 import { clearSavedChat } from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
 import { useBackdropClose } from "./use-backdrop-close";
 
 // The gear button in each screen's header, and the settings sheet it opens.
-// For now the sheet holds your account and Sign out; more settings can join later.
+// For now the sheet holds your account, Sign out and Sign out of all devices.
 export function SettingsButton({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -35,7 +35,10 @@ export function SettingsButtonPlaceholder() {
 function SettingsSheet({ email, onClose }: { email: string; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const signOutForm = useRef<HTMLFormElement>(null);
-  const [confirming, setConfirming] = useState(false);
+  // Which "are you sure?" is open: plain Sign out, or Sign out of all devices.
+  const [confirming, setConfirming] = useState<"this" | "all" | null>(null);
+  const [signingOutAll, startSignOutAll] = useTransition();
+  const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
   const backdropClose = useBackdropClose(onClose);
 
   useEffect(() => {
@@ -76,26 +79,62 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
             {/* The same sign-out form as before; the button asks "are you sure?"
                 first, and a yes submits it. The server then sends you to /login. */}
             <form ref={signOutForm} action={signOut}>
-              <SignOutButton onClick={() => setConfirming(true)} />
+              <SignOutButton onClick={() => setConfirming("this")} />
             </form>
+            <button
+              type="button"
+              onClick={() => {
+                setSignOutAllError(null);
+                setConfirming("all");
+              }}
+              disabled={signingOutAll}
+              className="mt-2.5 w-full rounded-xl border border-line bg-bg p-3 font-bold text-high disabled:opacity-50"
+            >
+              {signingOutAll ? "Signing out everywhere…" : "Sign out of all devices"}
+            </button>
+            {signOutAllError && (
+              <p role="alert" className="mt-2 text-[0.9rem] text-high">
+                {signOutAllError}
+              </p>
+            )}
           </section>
         </div>
       </dialog>
 
       {/* Kept outside the sheet's <dialog>: React passes a nested dialog's
           "close" up to the outer one, which would shut the whole sheet. */}
-      {confirming && (
+      {confirming === "this" && (
         <ConfirmDialog
           title="Sign out?"
           confirmLabel="Sign out"
           onConfirm={() => {
-            setConfirming(false);
+            setConfirming(null);
             clearSavedChat(); // the next person on this device shouldn't see it
             signOutForm.current?.requestSubmit();
           }}
-          onCancel={() => setConfirming(false)}
+          onCancel={() => setConfirming(null)}
         >
           You&apos;ll need your email and password to sign back in.
+        </ConfirmDialog>
+      )}
+      {confirming === "all" && (
+        <ConfirmDialog
+          title="Sign out everywhere?"
+          confirmLabel="Sign out everywhere"
+          onConfirm={() => {
+            setConfirming(null);
+            clearSavedChat(); // as with plain Sign out
+            startSignOutAll(async () => {
+              // On success the server sends you to /login, so this only
+              // comes back when it failed (and you're still signed in).
+              const { error } = await signOutEverywhere();
+              setSignOutAllError(error);
+            });
+          }}
+          onCancel={() => setConfirming(null)}
+        >
+          This signs you out here and on every other device, like your phone and computer. Other devices may
+          take up to an hour to be signed out. You&apos;ll also need to connect Claude to your tasks again.
         </ConfirmDialog>
       )}
     </>

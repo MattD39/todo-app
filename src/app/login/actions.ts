@@ -49,3 +49,19 @@ export async function signOut() {
   await supabase.auth.signOut({ scope: "local" });
   redirect("/login");
 }
+
+// "Sign out of all devices" (for a lost phone): ends every login on the
+// account, this device included. Supabase stops each login from being
+// renewed, but a login pass already handed out stays valid until it runs
+// out (up to about an hour), so other devices are locked out by then.
+// If Supabase can't be reached, nothing is signed out — so this says so
+// and leaves you signed in to try again, instead of pretending it worked.
+export async function signOutEverywhere(): Promise<{ error: string }> {
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.auth.signOut({ scope: "global" });
+  if (error) {
+    console.error("Sign out of all devices failed:", error.status, error.code);
+    return { error: "Couldn't sign out your other devices. Check your connection and try again." };
+  }
+  redirect("/login");
+}
