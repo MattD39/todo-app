@@ -3,11 +3,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
+import { isValidTimeZone } from "./dates";
 import { createSupabaseServerClient } from "./supabase/server";
 
 export type CurrentUser = {
   id: string;
   email: string | null;
+  // The time zone saved on the account (e.g. "America/Toronto"), or null if
+  // not saved yet. See saveTimeZone in src/app/timezone-actions.ts.
+  timeZone: string | null;
 };
 
 // The one place the app finds out who is signed in. Every page and every
@@ -42,8 +46,16 @@ const userFromCookie = cache(async (): Promise<CurrentUser | null> => {
   const { data, error } = await supabase.auth.getClaims();
   const claims = data?.claims;
   if (error || !claims?.sub) return null;
-  return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null };
+  return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null, timeZone: savedTimeZone(claims) };
 });
+
+// The time zone saved in the account's user metadata, if it's a real one.
+// (The app's own login pass carries the metadata; passes given to Claude
+// don't, so src/lib/mcp/auth.ts reads it from the account instead.)
+export function savedTimeZone(claims: { user_metadata?: Record<string, unknown> }): string | null {
+  const value = claims.user_metadata?.time_zone;
+  return typeof value === "string" && isValidTimeZone(value) ? value : null;
+}
 
 // MCP requests carry a login pass (a token) instead of a cookie. Once the MCP
 // server has checked it, it runs the tool "as" that user with this, so
@@ -57,4 +69,9 @@ const mcpUser = new AsyncLocalStorage<CurrentUser>();
 // verified login pass, never from anything a request sends as plain data.
 export function runAsVerifiedUser<T>(user: CurrentUser, work: () => Promise<T>): Promise<T> {
   return mcpUser.run(user, work);
+}
+
+// The MCP request's user, if this is one (null for the app's own pages).
+export function getMcpUser(): CurrentUser | null {
+  return mcpUser.getStore() ?? null;
 }

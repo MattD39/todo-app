@@ -1,7 +1,7 @@
 import "server-only";
 import type { AuthInfo } from "@modelcontextprotocol/server";
 import { createClient } from "@supabase/supabase-js";
-import { runAsVerifiedUser } from "../auth";
+import { runAsVerifiedUser, savedTimeZone } from "../auth";
 import { supabaseConfig } from "../supabase/config";
 
 // Who is using the MCP server.
@@ -34,12 +34,24 @@ export async function verifyMcpToken(_req: Request, bearerToken?: string): Promi
   // A normal browser login cookie's token isn't accepted here.
   const clientId = (claims as Record<string, unknown>).client_id;
   if (typeof clientId !== "string" || !clientId) return undefined;
+
+  // The account itself, fresh from Supabase, for the saved time zone: passes
+  // given to apps like Claude don't carry the account's settings (user
+  // metadata), unlike the app's own login. This also turns away a pass whose
+  // access was revoked since it was issued.
+  const { data: account, error: accountError } = await supabase.auth.getUser(bearerToken);
+  if (accountError || account.user?.id !== claims.sub) return undefined;
+
   return {
     token: bearerToken,
     clientId,
     scopes: [],
     expiresAt: typeof claims.exp === "number" ? claims.exp : undefined,
-    extra: { userId: claims.sub, email: typeof claims.email === "string" ? claims.email : null },
+    extra: {
+      userId: claims.sub,
+      email: typeof claims.email === "string" ? claims.email : null,
+      timeZone: savedTimeZone({ user_metadata: account.user.user_metadata }),
+    },
   };
 }
 
@@ -48,8 +60,9 @@ export async function verifyMcpToken(_req: Request, bearerToken?: string): Promi
 // app: only their tasks. Throws if there's no checked pass (can't happen
 // behind withMcpAuth, but better safe).
 export function asPassOwner<T>(authInfo: AuthInfo | undefined, work: () => Promise<T>): Promise<T> {
-  const extra = authInfo?.extra as { userId?: unknown; email?: unknown } | undefined;
+  const extra = authInfo?.extra as { userId?: unknown; email?: unknown; timeZone?: unknown } | undefined;
   if (typeof extra?.userId !== "string") throw new Error("Not signed in.");
   const email = typeof extra.email === "string" ? extra.email : null;
-  return runAsVerifiedUser({ id: extra.userId, email }, work);
+  const timeZone = typeof extra.timeZone === "string" ? extra.timeZone : null;
+  return runAsVerifiedUser({ id: extra.userId, email, timeZone }, work);
 }
