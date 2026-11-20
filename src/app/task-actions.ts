@@ -8,8 +8,12 @@ import {
   addSteps,
   createTask,
   deleteStep,
+  deleteFromBin,
   deleteTaskWithCopy,
   deleteTickWithCopy,
+  emptyBin,
+  listRecentlyDeleted,
+  restoreFromBin,
   restoreDeletedTask,
   restoreDeletedTick,
   setStepDone,
@@ -17,6 +21,7 @@ import {
   TaskError,
   undoCompletion,
   updateTask,
+  type BinItem,
   type DeletedTask,
   type DeletedTick,
   type NewTaskInput,
@@ -147,6 +152,35 @@ export async function undoSwipeDelete(copy: unknown): Promise<ActionResult> {
   if (task) return run("undo", () => restoreDeletedTask(task));
   if (tick) return run("undo", () => restoreDeletedTick(tick));
   return { error: "That can't be undone." };
+}
+
+// ─── Recently deleted (Settings) ─────────────────────────────────────────────
+
+// The list for the Settings sheet. Only reads, so the page isn't refreshed.
+export async function getRecentlyDeleted(): Promise<{ error: string | null; items?: BinItem[] }> {
+  try {
+    return { error: null, items: await listRecentlyDeleted() };
+  } catch (error) {
+    unstable_rethrow(error);
+    console.error("Listing recently deleted failed", error);
+    return { error: "Couldn't load Recently deleted. Check your connection and try again." };
+  }
+}
+
+export async function restoreTask(id: unknown): Promise<ActionResult & { value?: string }> {
+  if (typeof id !== "string") return { error: "Something went wrong." };
+  return run("restore", () => restoreFromBin(id));
+}
+
+export async function deleteForever(id: unknown): Promise<ActionResult> {
+  if (typeof id !== "string") return { error: "Something went wrong." };
+  return run("delete", () => deleteFromBin(id));
+}
+
+export async function emptyRecentlyDeleted(): Promise<ActionResult> {
+  return run("empty Recently deleted", async () => {
+    await emptyBin();
+  });
 }
 
 // Shared by every action: do the change, turn problems into a friendly

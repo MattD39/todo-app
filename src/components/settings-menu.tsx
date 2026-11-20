@@ -5,10 +5,12 @@ import { useFormStatus } from "react-dom";
 import { signOut, signOutEverywhere } from "@/app/login/actions";
 import { clearSavedChat } from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
+import { RecentlyDeleted, type ConfirmRequest } from "./recently-deleted";
 import { useBackdropClose } from "./use-backdrop-close";
 
 // The gear button in each screen's header, and the settings sheet it opens.
-// For now the sheet holds your account, Sign out and Sign out of all devices.
+// The sheet holds your account (Sign out, Sign out of all devices) and
+// Recently deleted.
 export function SettingsButton({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -39,6 +41,8 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
   const [confirming, setConfirming] = useState<"this" | "all" | null>(null);
   const [signingOutAll, startSignOutAll] = useTransition();
   const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
+  // An "are you sure?" asked by Recently deleted (Delete forever, Empty bin).
+  const [binConfirm, setBinConfirm] = useState<ConfirmRequest | null>(null);
   const backdropClose = useBackdropClose(onClose);
 
   useEffect(() => {
@@ -98,6 +102,8 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
               </p>
             )}
           </section>
+
+          <RecentlyDeleted askConfirm={setBinConfirm} />
         </div>
       </dialog>
 
@@ -133,8 +139,21 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
           }}
           onCancel={() => setConfirming(null)}
         >
-          This signs you out here and on every other device, like your phone and computer. Other devices may
-          take up to an hour to be signed out. You&apos;ll also need to connect Claude to your tasks again.
+          This signs you out here and on every other device, like your phone and computer. Other devices may take up to
+          an hour to be signed out. You&apos;ll also need to connect Claude to your tasks again.
+        </ConfirmDialog>
+      )}
+      {binConfirm && (
+        <ConfirmDialog
+          title={binConfirm.title}
+          confirmLabel={binConfirm.confirmLabel}
+          onConfirm={() => {
+            setBinConfirm(null);
+            binConfirm.onConfirm();
+          }}
+          onCancel={() => setBinConfirm(null)}
+        >
+          {binConfirm.body}
         </ConfirmDialog>
       )}
     </>

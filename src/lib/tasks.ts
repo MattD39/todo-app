@@ -307,9 +307,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<Task
 
 // What happened when a task was ticked: a one-off task is simply done; a
 // repeating one "rolled" on to its next date (and can be undone).
-export type DoneResult =
-  | { rolled: false }
-  | { rolled: true; completionId: string; nextDate: string; today: string };
+export type DoneResult = { rolled: false } | { rolled: true; completionId: string; nextDate: string; today: string };
 
 // Tick a task off, or untick it. Ticking a repeating task doesn't mark it
 // done: it records the tick and moves the task to its next date instead.
@@ -489,10 +487,72 @@ function binCutoff(): Date {
   return new Date(Date.now() - BIN_DAYS * 24 * 60 * 60 * 1000);
 }
 
+// One task in Recently deleted, as the list in Settings shows it.
+export type BinItem = { id: string; title: string; deletedAt: string /* ISO */ };
+
+const MAX_BIN_LIST = 500;
+
+// Your recently deleted tasks, newest first. Copies past their 30 days are
+// cleared out first, and never listed even if one slipped through.
+export async function listRecentlyDeleted(): Promise<BinItem[]> {
+  return asCurrentUser(async (tx, userId) => {
+    await clearOldFromBin(tx, userId);
+    // Only the title is read from each copy (a copy can be large).
+    const rows = await tx.$queryRaw<{ id: string; title: string | null; deletedAt: Date }[]>`
+      SELECT "id", "copy"->>'title' AS "title", "deletedAt"
+      FROM "RecentlyDeleted"
+      WHERE "userId" = ${userId}::uuid AND "deletedAt" >= ${binCutoff()}
+      ORDER BY "deletedAt" DESC
+      LIMIT ${MAX_BIN_LIST}`;
+    return rows.map((r) => ({
+      id: r.id,
+      title: (r.title ?? "").slice(0, MAX_TITLE) || "Untitled task",
+      deletedAt: r.deletedAt.toISOString(),
+    }));
+  });
+}
+
+// Restore: puts a task from the bin back on your lists, exactly as it was
+// (same id, steps, history and category). Returns its title.
+export async function restoreFromBin(id: string): Promise<string> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!isUuid(id)) throw new TaskError(NOT_IN_BIN);
+  return asCurrentUser(async (tx, userId) => {
+    const row = await tx.recentlyDeleted.findFirst({
+      where: { id, userId, deletedAt: { gte: binCutoff() } },
+      select: { copy: true },
+    });
+    if (!row) throw new TaskError(NOT_IN_BIN);
+    return restoreCopy(tx, userId, row.copy);
+  });
+}
+
+// Delete forever: removes one copy from the bin for good.
+export async function deleteFromBin(id: string): Promise<void> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!isUuid(id)) throw new TaskError(NOT_IN_BIN);
+  const { count } = await asCurrentUser((tx, userId) => tx.recentlyDeleted.deleteMany({ where: { id, userId } }));
+  if (count === 0) throw new TaskError(NOT_IN_BIN);
+}
+
+// Empty bin: removes every copy in your bin for good. Returns how many.
+export async function emptyBin(): Promise<number> {
+  const { count } = await asCurrentUser((tx, userId) => tx.recentlyDeleted.deleteMany({ where: { userId } }));
+  return count;
+}
+
+const NOT_IN_BIN = "That's no longer in Recently deleted.";
+
 // Puts a deleted task back from its copy. The copy comes back from the
 // browser, so every field is checked again like any other input.
 export async function restoreDeletedTask(input: unknown): Promise<void> {
   await getCurrentUser(); // signed-out visitors are turned away before anything else
+  await asCurrentUser((tx, userId) => restoreCopy(tx, userId, input));
+}
+
+// Puts a task back from a copy (from swipe Undo, or Restore in Recently
+// deleted) and takes it out of the bin. Returns its title.
+async function restoreCopy(tx: Db, userId: string, input: unknown): Promise<string> {
   const copy = asObject(input);
   const id = copy.id;
   if (!isUuid(id)) throw new TaskError("That can't be undone.");
@@ -510,39 +570,38 @@ export async function restoreDeletedTask(input: unknown): Promise<void> {
   const ticks = Array.isArray(copy.ticks) ? copy.ticks.map(asObject) : [];
   if (ticks.length > 5000) throw new TaskError("That can't be undone.");
 
-  await asCurrentUser(async (tx, userId) => {
-    if (await tx.task.findFirst({ where: { id }, select: { id: true } })) {
-      throw new TaskError("It's already back.");
-    }
-    await tx.task.create({
-      data: {
-        id,
-        userId,
-        title,
-        notes,
-        priority,
-        dueDate: dueDate ? dateToDb(dueDate) : null,
-        dueTime,
-        repeat,
-        done,
-        doneAt,
-        createdAt,
-        categoryId: await categoryIdFor(tx, userId, typeof copy.category === "string" ? copy.category : null),
-        subtasks: {
-          create: steps.map((s, i) => ({
-            ...(isUuid(s.id) ? { id: s.id } : {}),
-            title: cleanStepTitle(s.title),
-            done: s.done === true,
-            position: Number.isInteger(s.position) ? (s.position as number) : i,
-            createdAt: cleanMoment(s.createdAt) ?? new Date(),
-          })),
-        },
-        completions: { create: ticks.map(cleanTickFields) },
+  if (await tx.task.findFirst({ where: { id }, select: { id: true } })) {
+    throw new TaskError("It's already back.");
+  }
+  await tx.task.create({
+    data: {
+      id,
+      userId,
+      title,
+      notes,
+      priority,
+      dueDate: dueDate ? dateToDb(dueDate) : null,
+      dueTime,
+      repeat,
+      done,
+      doneAt,
+      createdAt,
+      categoryId: await categoryIdFor(tx, userId, typeof copy.category === "string" ? copy.category : null),
+      subtasks: {
+        create: steps.map((s, i) => ({
+          ...(isUuid(s.id) ? { id: s.id } : {}),
+          title: cleanStepTitle(s.title),
+          done: s.done === true,
+          position: Number.isInteger(s.position) ? (s.position as number) : i,
+          createdAt: cleanMoment(s.createdAt) ?? new Date(),
+        })),
       },
-    });
-    // It's back, so it's no longer in Recently deleted.
-    await tx.recentlyDeleted.deleteMany({ where: { id, userId } });
+      completions: { create: ticks.map(cleanTickFields) },
+    },
   });
+  // It's back, so it's no longer in Recently deleted.
+  await tx.recentlyDeleted.deleteMany({ where: { id, userId } });
+  return title;
 }
 
 // Deletes one tick of a repeating task (one history entry). The task itself
