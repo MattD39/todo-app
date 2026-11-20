@@ -1,6 +1,6 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { verifyMcpToken } from "@/lib/mcp/auth";
-import { registerTools } from "@/lib/mcp/tools";
+import { registerChangeTools, registerTools } from "@/lib/mcp/tools";
 
 // /api/mcp: the MCP server. This is the address you give Claude (claude.ai,
 // the Claude iPhone app, Claude Desktop or Claude Code) to connect it to your
@@ -12,9 +12,15 @@ import { registerTools } from "@/lib/mcp/tools";
 // one the answer is "401: sign in first", plus where to find the sign-in
 // details (/.well-known/oauth-protected-resource/api/mcp), which is how
 // Claude knows to send you to the "Allow Claude?" page.
-const handler = createMcpHandler(registerTools, {
-  serverInfo: { name: "todo", version: "0.1.0" },
-});
+const handler = createMcpHandler(
+  (server) => {
+    registerTools(server);
+    registerChangeTools(server);
+  },
+  {
+    serverInfo: { name: "todo", version: "0.1.0" },
+  },
+);
 
 const authHandler = withMcpAuth(handler, verifyMcpToken, {
   required: true,
