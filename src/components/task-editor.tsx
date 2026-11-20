@@ -52,12 +52,14 @@ export function TaskEditorProvider({
   defaultCategory,
   today,
   showAddButton = true,
+  enterToAdd = false,
   children,
 }: {
   categories: string[];
   defaultCategory: string | null; // the filter chip that's on, if any — new tasks start in it
   today: string; // in the user's time zone
   showAddButton?: boolean; // the floating "Add task" button (off on the Chat tab, where it would cover Send)
+  enterToAdd?: boolean; // Enter opens Add task on a computer (Today, Upcoming, Calendar)
   children: React.ReactNode;
 }) {
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -89,7 +91,9 @@ export function TaskEditorProvider({
     <OpenEditor value={open}>
       <ShowToast value={toast}>
         {children}
-        {showAddButton && <AddTaskButton onClick={() => open({ mode: "new", dueDate: calendarDay(today) })} />}
+        {showAddButton && (
+          <AddTaskButton enterToAdd={enterToAdd} onClick={() => open({ mode: "new", dueDate: calendarDay(today) })} />
+        )}
         {editing && (
           <TaskSheet
             key={openCount}
@@ -162,8 +166,37 @@ export function OpenTaskButton({
 //   2. flushSync draws and opens the sheet right now instead of a moment
 //      later, and the sheet focuses its title box as it opens (see TaskSheet).
 // Moving focus from one text box to another keeps the keyboard up.
-function AddTaskButton({ onClick }: { onClick: () => void }) {
+function AddTaskButton({ onClick, enterToAdd }: { onClick: () => void; enterToAdd: boolean }) {
   const keyboardOpener = useRef<HTMLInputElement>(null);
+  const press = useCallback(() => {
+    keyboardOpener.current?.focus({ preventScroll: true });
+    flushSync(onClick);
+  }, [onClick]);
+
+  // On a computer, Enter opens Add task, like clicking the button. Only when
+  // nothing else is going on: never while a sheet or pop-up is open, never in
+  // a box you type in, and never when a button or link has the keyboard
+  // highlight (moved to with Tab), because Enter presses that one. A button
+  // you just clicked with the mouse has no highlight, so Enter adds a task
+  // (e.g. click a day on the Calendar, then Enter adds one on that day).
+  useEffect(() => {
+    if (!enterToAdd) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Enter" || e.repeat || e.isComposing || e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (document.querySelector("dialog[open]")) return;
+      const target = e.target;
+      if (target instanceof Element && target !== document.body) {
+        if (target.closest("input, textarea, select, [contenteditable]")) return;
+        if (target.matches(":focus-visible")) return;
+      }
+      e.preventDefault(); // so a clicked button isn't pressed again as well
+      press();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [enterToAdd, press]);
+
   return (
     <>
       <input
@@ -176,12 +209,7 @@ function AddTaskButton({ onClick }: { onClick: () => void }) {
         // stops the iPhone zooming in on it.
         className="pointer-events-none fixed top-0 left-0 size-px text-base opacity-0"
       />
-      <AddTaskFab
-        onClick={() => {
-          keyboardOpener.current?.focus({ preventScroll: true });
-          flushSync(onClick);
-        }}
-      />
+      <AddTaskFab onClick={press} />
     </>
   );
 }

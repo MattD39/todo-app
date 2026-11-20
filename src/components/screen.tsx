@@ -82,6 +82,7 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
       defaultCategory={data.category}
       today={data.now.today}
       showAddButton={tab !== "chat"} // it would sit on top of the chat's Send button
+      enterToAdd={tab === "today" || tab === "upcoming" || tab === "calendar"}
     >
       <TimeZoneSync serverTimeZone={data.timeZone} savedTimeZone={data.user.timeZone} />
       <RefreshOnReturn />
