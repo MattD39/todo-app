@@ -14,7 +14,8 @@
     "db:studio": "prisma studio",
     "check:chat-tools": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-chat-tools.mts",
     "check:errors": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-errors.mts",
-    "check:limits": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-limits.mts"
+    "check:limits": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-limits.mts",
+    "check:mcp": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-mcp.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.8.0",

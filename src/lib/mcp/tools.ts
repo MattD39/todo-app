@@ -74,6 +74,16 @@ const REPEAT = z.enum(["daily", "weekly", "monthly"]);
 const TASK_ID = z.uuid().describe("The task's id, from list_open_tasks.");
 const CLEARABLE = ["due_date", "due_time", "category", "repeat"] as const;
 
+// An optional field that may also come blank (""), which some apps send for
+// a box that was typed in and cleared. Blank means "not given", like leaving
+// it out (read it with given()).
+function blankable<T extends z.ZodType>(schema: T) {
+  return z.union([schema, z.literal("")]).optional();
+}
+function given<T>(value: T | "" | undefined): T | undefined {
+  return value === "" ? undefined : value;
+}
+
 const AFTER_CHANGE =
   "Tell the user briefly what changed. There's no delete tool: a task added by mistake can be deleted in the To-Do app.";
 
@@ -90,23 +100,22 @@ export function registerTools(server: McpServer) {
         "task's id, due date and time, priority, category, repeat and how many steps are done. Use `show` to " +
         "pick which ones (default all) and `category` to keep only one category. Dates are in the user's time zone.",
       inputSchema: z.object({
-        show: z
-          .enum(["all", "today", "overdue", "upcoming", "no_due_date"])
-          .optional()
-          .describe(
-            "all (default); today = due today; overdue = past their due date or time; " +
-              "upcoming = due after today; no_due_date = tasks with no date",
-          ),
-        category: z
-          .string()
-          .max(MAX_CATEGORY)
-          .optional()
-          .describe("Only tasks in this category (exact name)."),
+        show: blankable(
+          z.enum(["all", "today", "overdue", "upcoming", "no_due_date"]),
+        ).describe(
+          "all (default); today = due today; overdue = past their due date or time; " +
+            "upcoming = due after today; no_due_date = tasks with no date",
+        ),
+        category: blankable(z.string().max(MAX_CATEGORY)).describe(
+          "Only tasks in this category (exact name).",
+        ),
       }),
       annotations: READ_ONLY,
     },
-    async ({ show = "all", category }, ctx) =>
+    async (input, ctx) =>
       asPassOwner(ctx.http?.authInfo, async () => {
+        const show = given(input.show) ?? "all";
+        const category = given(input.category)?.trim() || undefined;
         const { now, header } = await clock();
         let tasks = await listOpenTasks();
         if (category)
@@ -169,20 +178,17 @@ export function registerTools(server: McpServer) {
         `Lists what the user finished in the last few days (default 7, up to ${MAX_FINISHED_DAYS}), newest ` +
         "first: tasks ticked off, and each tick of a repeating task. Dates are in the user's time zone.",
       inputSchema: z.object({
-        days: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_FINISHED_DAYS)
-          .optional()
-          .describe(
-            "How many days back, counting today (1 = just today). Default 7.",
-          ),
+        days: blankable(
+          z.number().int().min(1).max(MAX_FINISHED_DAYS),
+        ).describe(
+          "How many days back, counting today (1 = just today). Default 7.",
+        ),
       }),
       annotations: READ_ONLY,
     },
-    async ({ days = 7 }, ctx) =>
+    async (input, ctx) =>
       asPassOwner(ctx.http?.authInfo, async () => {
+        const days = given(input.days) ?? 7;
         const { now, header, timeZone } = await clock();
         const from = addDays(now.today, -(days - 1));
         const history = await listHistory(from, now.today);
@@ -252,24 +258,20 @@ export function registerChangeTools(server: McpServer) {
           .min(1)
           .max(MAX_TITLE)
           .describe("Short title, starting with a verb when it fits."),
-        due_date: DATE.optional().describe('Due date as "YYYY-MM-DD".'),
-        due_time: TIME.optional().describe(
+        due_date: blankable(DATE).describe('Due date as "YYYY-MM-DD".'),
+        due_time: blankable(TIME).describe(
           'Due time as 24-hour "HH:MM". Needs a due date.',
         ),
-        priority: PRIORITY.optional().describe("Leave out for medium."),
-        category: z
-          .string()
-          .max(MAX_CATEGORY)
-          .optional()
-          .describe("A category name, ideally one the user already has."),
-        repeat: REPEAT.optional().describe(
+        priority: blankable(PRIORITY).describe("Leave out for medium."),
+        category: blankable(z.string().max(MAX_CATEGORY)).describe(
+          "A category name, ideally one the user already has.",
+        ),
+        repeat: blankable(REPEAT).describe(
           "How often it repeats. Leave out for a one-off task.",
         ),
-        notes: z
-          .string()
-          .max(MAX_NOTES)
-          .optional()
-          .describe("Extra details the user gave."),
+        notes: blankable(z.string().max(MAX_NOTES)).describe(
+          "Extra details the user gave.",
+        ),
       }),
       annotations: ADDS,
     },
@@ -277,17 +279,17 @@ export function registerChangeTools(server: McpServer) {
       asPassOwner(ctx.http?.authInfo, async () => {
         const fields = cleanFields({
           title: input.title,
-          dueDate: input.due_date,
-          dueTime: input.due_time,
-          priority: input.priority,
-          category: input.category,
-          repeat: input.repeat,
+          dueDate: given(input.due_date),
+          dueTime: given(input.due_time),
+          priority: given(input.priority),
+          category: given(input.category),
+          repeat: given(input.repeat),
         });
         if (typeof fields === "string")
           return text(`Not added: ${fields}`, true);
         if (fields.dueTime && !fields.dueDate)
           return text("Not added: a due time needs a due date.", true);
-        const notes = input.notes?.trim();
+        const notes = given(input.notes)?.trim();
         const task = {
           ...fields,
           title: fields.title!,
@@ -307,21 +309,16 @@ export function registerChangeTools(server: McpServer) {
         "day keeps its time). This tool can't remove anything: use clear_fields for that.",
       inputSchema: z.object({
         task_id: TASK_ID,
-        title: z
-          .string()
-          .min(1)
-          .max(MAX_TITLE)
-          .optional()
-          .describe("New title."),
-        due_date: DATE.optional().describe('New due date as "YYYY-MM-DD".'),
-        due_time: TIME.optional().describe('New due time as 24-hour "HH:MM".'),
-        priority: PRIORITY.optional(),
-        category: z
-          .string()
-          .max(MAX_CATEGORY)
-          .optional()
-          .describe("New category name."),
-        repeat: REPEAT.optional().describe("New repeat."),
+        title: blankable(z.string().min(1).max(MAX_TITLE)).describe(
+          "New title.",
+        ),
+        due_date: blankable(DATE).describe('New due date as "YYYY-MM-DD".'),
+        due_time: blankable(TIME).describe('New due time as 24-hour "HH:MM".'),
+        priority: blankable(PRIORITY),
+        category: blankable(z.string().max(MAX_CATEGORY)).describe(
+          "New category name.",
+        ),
+        repeat: blankable(REPEAT).describe("New repeat."),
       }),
       annotations: OVERWRITES,
     },
@@ -329,7 +326,8 @@ export function registerChangeTools(server: McpServer) {
       asPassOwner(ctx.http?.authInfo, async () => {
         const task = await openTask(task_id);
         if (typeof task === "string") return text(task, true);
-        // Drops values the task already has; nothing left = nothing to do.
+        // Drops values the task already has, and blank ones (updateFields
+        // treats "" as not given); nothing left = nothing to do.
         const changes = updateFields(input, task);
         if (typeof changes === "string")
           return text(`Not changed: ${changes}`, true);
