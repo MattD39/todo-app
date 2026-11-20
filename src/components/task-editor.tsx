@@ -188,7 +188,9 @@ function AddTaskButton({ onClick, enterToAdd }: { onClick: () => void; enterToAd
       const target = e.target;
       if (target instanceof Element && target !== document.body) {
         if (target.closest("input, textarea, select, [contenteditable]")) return;
-        if (target.matches(":focus-visible")) return;
+        // A highlighted button keeps its Enter, except one marked to pass it
+        // on (the Calendar's already-selected day).
+        if (target.matches(":focus-visible") && !target.closest("[data-enter-adds-task]")) return;
       }
       e.preventDefault(); // so a clicked button isn't pressed again as well
       press();

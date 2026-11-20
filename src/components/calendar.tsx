@@ -117,6 +117,9 @@ export function MonthCalendar({
                 onClick={() => select(day)}
                 aria-label={label}
                 aria-pressed={isSelected}
+                // Enter on the day that's already selected opens Add task for
+                // that day (see AddTaskButton) instead of selecting it again.
+                data-enter-adds-task={isSelected ? "" : undefined}
                 className={className}
               >
                 {content}

@@ -55,6 +55,16 @@ export function Chat() {
   // hides the screen, and a reply that finishes then puts the dot up.)
   useEffect(() => chatViewOpened(), []);
 
+  // On a computer, opening Chat puts the cursor in the message box, ready to
+  // type. Not on a phone or tablet with a touch screen: there it would pop the
+  // keyboard up over the conversation. ("hover + fine pointer" = a mouse or
+  // trackpad is the main way of pointing.)
+  useEffect(() => {
+    if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+      inputRef.current?.focus({ preventScroll: true });
+    }
+  }, []);
+
   // Follow the newest message: scroll to the bottom as the reply grows, but
   // only while you're at the bottom. Scroll up to read and it leaves you be;
   // scroll back down (or send a message) and it follows again.
