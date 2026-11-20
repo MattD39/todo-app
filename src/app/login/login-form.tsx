@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { announceSignedIn } from "@/components/signed-in";
 import { signIn, type SignInState } from "./actions";
 
@@ -8,6 +9,8 @@ const initialState: SignInState = { error: null, email: "" };
 
 export function LoginForm() {
   const [state, formAction, pending] = useActionState(signIn, initialState);
+  // Where to go after signing in (checked again on the server).
+  const next = useSearchParams().get("next") ?? "";
 
   // Leaving this page means you're signed in (every other page sends you back
   // here otherwise), so any "You've been signed out" message still showing in
@@ -16,6 +19,7 @@ export function LoginForm() {
 
   return (
     <form action={formAction} className="flex flex-col gap-3.5">
+      <input type="hidden" name="next" value={next} />
       <label className="flex flex-col gap-1.5 text-[0.8rem] font-bold text-muted">
         Email
         <input

@@ -1,10 +1,14 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { SIGNED_OUT_MESSAGE, type ProblemCode } from "@/lib/problems";
+import { safeNext } from "@/lib/safe-next";
 import { supabaseConfig } from "@/lib/supabase/config";
 
-// Pages anyone can open without being signed in.
-const PUBLIC_PATHS = ["/login"];
+// Pages anyone can open without being signed in. /api/mcp is "public" here
+// only because it doesn't use the login cookie: it checks the login pass
+// Claude sends with each request itself (src/lib/mcp/auth.ts).
+// /.well-known holds the public "where to sign in" details for Claude.
+const PUBLIC_PATHS = ["/login", "/api/mcp", "/.well-known"];
 
 // Runs before every page request. Two jobs:
 // 1. Keep the Supabase login fresh. Login tokens expire after about an hour; this
@@ -46,7 +50,7 @@ export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + "/"));
 
-  if (!signedIn && path.startsWith("/api/")) {
+  if (!signedIn && path.startsWith("/api/") && !isPublic) {
     // The browser's code calls these, not a person, so a redirect to the login
     // page would just look like a strange reply. Say "not signed in" instead.
     const denied = NextResponse.json(
@@ -57,10 +61,14 @@ export async function proxy(request: NextRequest) {
     return denied;
   }
   if (!signedIn && !isPublic) {
-    return redirectKeepingCookies(request, response, "/login");
+    // Remember where you were going (e.g. the "Allow Claude?" page), so
+    // signing in takes you back there.
+    const next = safeNext(path + request.nextUrl.search);
+    const to = next && next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/login";
+    return redirectKeepingCookies(request, response, to);
   }
   if (signedIn && path === "/login") {
-    return redirectKeepingCookies(request, response, "/");
+    return redirectKeepingCookies(request, response, safeNext(request.nextUrl.searchParams.get("next")) ?? "/");
   }
   return response;
 }

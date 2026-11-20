@@ -1,4 +1,5 @@
 import "server-only";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
@@ -12,18 +13,25 @@ export type CurrentUser = {
 // The one place the app finds out who is signed in. Every page and every
 // database read or write must start here and filter by the returned id.
 // Signed-out visitors are sent to /login.
-// cache() remembers the answer for the rest of the same request, so calling
-// this from many places (every function in tasks.ts) only checks once.
-export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
+export async function getCurrentUser(): Promise<CurrentUser> {
   const user = await getSignedInUser();
   if (!user) redirect("/login");
   return user;
-});
+}
 
 // The same check, but answers null for a signed-out visitor instead of
 // sending them to /login. For the Claude features and Chat saving, which
 // say "you've been signed out" instead, so nothing typed on screen is lost.
-export const getSignedInUser = cache(async (): Promise<CurrentUser | null> => {
+export async function getSignedInUser(): Promise<CurrentUser | null> {
+  // A request from the MCP server (Claude connected to the app): who it is
+  // was already checked from its login pass (see src/lib/mcp/auth.ts).
+  return mcpUser.getStore() ?? userFromCookie();
+}
+
+// The browser's login cookie. cache() remembers the answer for the rest of
+// the same request, so calling this from many places (every function in
+// tasks.ts) only checks once.
+const userFromCookie = cache(async (): Promise<CurrentUser | null> => {
   // Checking a login compares the token's expiry with the current time, so it
   // must run fresh on every visit, never ahead of time. connection() tells
   // Next.js to wait for the real request before running anything below.
@@ -36,3 +44,17 @@ export const getSignedInUser = cache(async (): Promise<CurrentUser | null> => {
   if (error || !claims?.sub) return null;
   return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null };
 });
+
+// MCP requests carry a login pass (a token) instead of a cookie. Once the MCP
+// server has checked it, it runs the tool "as" that user with this, so
+// everything else (tasks.ts, the database rules) works exactly as for the
+// app's own pages: only that user's tasks, nobody else's.
+// (AsyncLocalStorage keeps the user attached to this one request only, even
+// when many requests run at the same time.)
+const mcpUser = new AsyncLocalStorage<CurrentUser>();
+
+// Runs `work` as `user`. Only for src/lib/mcp/: `user` must come from a
+// verified login pass, never from anything a request sends as plain data.
+export function runAsVerifiedUser<T>(user: CurrentUser, work: () => Promise<T>): Promise<T> {
+  return mcpUser.run(user, work);
+}

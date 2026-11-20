@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { safeNext } from "@/lib/safe-next";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type SignInState = { error: string | null; email: string };
@@ -10,7 +11,9 @@ export async function signIn(_prev: SignInState, formData: FormData): Promise<Si
   const password = String(formData.get("password") ?? "");
   const error = await trySignIn(email, password);
   if (error) return { error, email };
-  redirect("/");
+  // Back to where you were going (e.g. the "Allow Claude?" page), if it's a
+  // page of this app; otherwise Today.
+  redirect(safeNext(formData.get("next")) ?? "/");
 }
 
 // Signs in without leaving the page: the small sign-in box that opens when a
