@@ -82,6 +82,32 @@ export function shiftTitle(start: string, end: string, person?: string | null): 
   return `${who} ${shortTime(start)}–${shortTime(end)}${overnight}`;
 }
 
+// A shift title taken apart: "Elena work 9 AM–5 PM" → person "elena", times
+// "9 am–5 pm". Null if the title isn't shaped like a shift. (Accepts a plain
+// "-" too, in case a task was typed by hand.)
+function shiftParts(title: string): { person: string; times: string } | null {
+  const time = String.raw`\d{1,2}(?::\d{2})?\s*[ap]m`;
+  const match = new RegExp(String.raw`^(?:(.+?)\s+work|work)\s+(${time}\s*[–-]\s*${time}(?:\s*\(ends next day\))?)$`, "i").exec(
+    title.replace(/\s+/g, " ").trim(),
+  );
+  if (!match) return null;
+  return {
+    person: (match[1] ?? "").toLowerCase(),
+    times: match[2].toLowerCase().replace(/\s+/g, "").replace("-", "–"),
+  };
+}
+
+// Whether two shift titles on the same day are the same shift: same start and
+// end time, and the same person, or one of them has no name ("Work 9 AM–5 PM"
+// is the same shift as "Elena work 9 AM–5 PM"). Different names are different
+// people's shifts, so both are allowed.
+export function sameShift(a: string, b: string): boolean {
+  const x = shiftParts(a);
+  const y = shiftParts(b);
+  if (!x || !y || x.times !== y.times) return false;
+  return x.person === y.person || x.person === "" || y.person === "";
+}
+
 function shortTime(time: string): string {
   const [h, m] = time.split(":").map(Number);
   return `${h % 12 || 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h >= 12 ? "PM" : "AM"}`;

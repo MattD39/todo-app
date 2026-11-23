@@ -160,6 +160,61 @@ check(
   !ai.queueChange(shiftCall("2026-11-23", "Monday"), existing, [], NOW.today).ok,
 );
 
+// Duplicates (5c-1): same day + same start and end = the same shift, if the
+// names match (any capitals) or one of them has no name.
+const onMonday = (title: string) =>
+  new Map([["T1", task("t1", title, { dueDate: "2026-11-23", dueTime: "09:00" })]]);
+const mondayShift = (person: string | null, start = "09:00", end = "17:00") =>
+  shiftCall("2026-11-23", "Monday", start, end, person);
+const refusedAsOnList = (r: { ok: boolean; message: string }) => !r.ok && /already on the user/.test(r.message);
+check(
+  "duplicate: no name on the list, new one with a name, is refused",
+  refusedAsOnList(ai.queueChange(mondayShift("Elena"), onMonday("Work 9 AM–5 PM"), [], NOW.today)),
+);
+check(
+  "duplicate: a name on the list, new one with no name, is refused",
+  refusedAsOnList(ai.queueChange(mondayShift(null), onMonday("Elena work 9 AM–5 PM"), [], NOW.today)),
+);
+check(
+  "duplicate: the same name in different capitals is refused",
+  refusedAsOnList(ai.queueChange(mondayShift("elena"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today)),
+);
+check(
+  "two different names, same day and times, are both allowed (Elena on the list, Marcus added)",
+  ai.queueChange(mondayShift("Marcus"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today).ok,
+);
+check(
+  "a different time on the same day is allowed",
+  ai.queueChange(mondayShift(null, "09:00", "13:00"), onMonday("Work 9 AM–5 PM"), [], NOW.today).ok,
+);
+check(
+  "the same times on a different day are allowed",
+  ai.queueChange(shiftCall("2026-11-24", "Tuesday"), onMonday("Work 9 AM–5 PM"), [], NOW.today).ok,
+);
+check(
+  "a hand-typed \"work 9am-5pm\" counts as the same shift",
+  refusedAsOnList(ai.queueChange(mondayShift(null), onMonday("work 9am-5pm"), [], NOW.today)),
+);
+check(
+  "an ordinary task on that day isn't mistaken for a shift",
+  ai.queueChange(mondayShift(null), onMonday("Call the dentist"), [], NOW.today).ok,
+);
+const finishedMonday = [task("f1", "Work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00", done: true })];
+check(
+  "a shift already finished this week is refused",
+  refusedAsOnList(ai.queueChange(mondayShift(null), noTasks, [], NOW.today, finishedMonday)),
+);
+queue = [];
+ai.queueChange(mondayShift("Elena"), noTasks, queue, NOW.today);
+check(
+  "in one reply: Elena's shift, then the same with no name, is refused",
+  !ai.queueChange(mondayShift(null), noTasks, queue, NOW.today).ok && queue.length === 1,
+);
+check(
+  "in one reply: Elena's shift, then Marcus's at the same time, are both queued",
+  ai.queueChange(mondayShift("Marcus"), noTasks, queue, NOW.today).ok && queue.length === 2,
+);
+
 queue = [];
 let allOk = true;
 for (let i = 0; i < 20; i++) {
@@ -224,11 +279,12 @@ async function ask(
   turns: ChatTurn[],
   photo: ChatPhoto | null,
   open: TaskDTO[] = [task("m1", "Buy milk")],
+  finished: TaskDTO[] = [],
 ): Promise<Result> {
   const meter = new ClaudeMeter();
   const queue: ChatChange[] = [];
   let reply = "";
-  const snapshot = { open, history: { done: [], ticks: [] }, now: NOW, timeZone: TIME_ZONE };
+  const snapshot = { open, history: { done: finished, ticks: [] }, now: NOW, timeZone: TIME_ZONE };
   for await (const piece of ai.chatAboutTasks(turns, snapshot, new AbortController().signal, queue, meter, photo)) {
     reply += piece;
   }
@@ -288,6 +344,30 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     "skips the shift already there, adds the other 4",
     same(r.queue, clearWeek.slice(1)),
     JSON.stringify(shiftsOf(r.queue)),
+  );
+
+  // 1c. The same photo sent again when every shift is already there (one
+  // with a name in front, one already ticked off): nothing new is added,
+  // and Claude says they were already on the list.
+  console.log("\n1c. Same photo again, all 5 shifts already there (Monday with a name, Friday ticked off)");
+  const allThere = [
+    task("w1", "Jordan work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" }),
+    task("w2", "Work 12 PM–8 PM", { dueDate: "2026-11-25", dueTime: "12:00" }),
+    task("w3", "Work 7 AM–3 PM", { dueDate: "2026-11-26", dueTime: "07:00" }),
+    task("w5", "Work 10 AM–6:30 PM", { dueDate: "2026-11-28", dueTime: "10:00" }),
+  ];
+  const tickedFriday = task("w4", "Work 9 AM–5 PM", {
+    dueDate: "2026-11-27",
+    dueTime: "09:00",
+    done: true,
+    doneAt: "2026-11-20T14:00:00.000Z",
+  });
+  r = await ask([user("Add these shifts please.")], photo, [task("m1", "Buy milk"), ...allThere], [tickedFriday]);
+  check("adds nothing", r.queue.length === 0, JSON.stringify(shiftsOf(r.queue)));
+  check("says they were already on the list", /already/i.test(r.reply));
+  check(
+    "never claims it's adding one",
+    !/\b(I'm (only )?adding|I'll (only )?add|I've added|I added)\b/i.test(r.reply),
   );
 
   // 2. Weekdays only: must ask which week, then use the answer.

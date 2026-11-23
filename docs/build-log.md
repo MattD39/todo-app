@@ -336,3 +336,26 @@ Short entries, added as each new step is finished and committed.
     daily spending cap, and every photo is still recorded.
   - **Testing:** 8 new free checks, including "the switch is off on the live
     site even if the setting is there".
+
+- **Nov 22 — Photo to schedule, part 3a: no duplicate shifts.** Sending the
+  same schedule twice no longer adds the shifts again; Claude says they're
+  already on the list.
+  - **The rule (my decision):** two shifts on the same day with the same
+    start and end time are the same shift if the names match (capitals don't
+    matter) or one of them has no name. Two different people's shifts at the
+    same time, like Elena's and Marcus's, are both allowed. The app checks
+    open tasks, tasks finished this week, and shifts earlier in the same
+    reply, including tasks typed by hand like "work 9am-5pm".
+  - **Problem found:** with a shift already ticked off, Claude announced
+    "I'll add Friday" and the app then refused it. Cause: the finished list
+    Claude sees showed when a task was ticked off, but not the day it was
+    due, so Claude couldn't tell it was that Friday's shift. Fix: finished
+    tasks now show their due date, and the app tells Claude exactly which
+    task a refused shift matched.
+  - **Testing:** 11 new free checks plus a live check that re-sends a week
+    that's already there (53 checks, passed twice), and 8 tests in the app,
+    including deleting one shift and re-sending (only that one came back)
+    and the two-names case.
+  - **Noted for next step:** with someone else's shift on the list, Claude
+    asked "Are these your shifts?" before adding anything, instead of adding
+    the clear shifts and asking only about the unclear one.

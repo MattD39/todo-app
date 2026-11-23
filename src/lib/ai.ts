@@ -13,7 +13,7 @@ import {
   type ChatChange,
 } from "./chat-changes";
 import { addDays, dayOf, formatDay, formatTime, isOverdue, isValidDay, relDay, type Now } from "./dates";
-import { describeCalendar, shiftTitle, weekdayOf, WEEKDAYS, type ChatPhoto } from "./schedule-photo";
+import { describeCalendar, sameShift, shiftTitle, weekdayOf, WEEKDAYS, type ChatPhoto } from "./schedule-photo";
 import { MAX_NOTES, MAX_TITLE, type HistoryDTO, type TaskChanges, type TaskDTO } from "./tasks";
 
 // The app's Claude features. Each one builds a prompt from the task, asks
@@ -163,7 +163,10 @@ const SCHEDULE_PHOTO_RULES =
   `5. If there are more than ${MAX_SHIFTS_PER_MESSAGE} shifts to add, add none: say so and ask for one week ` +
   "at a time.\n" +
   "6. If the photo isn't a schedule, or you can't read it, say so plainly and add nothing.\n" +
-  "7. Skip shifts already on the open task list, and shifts on days already past; say which you skipped.\n" +
+  "7. Skip shifts already on the task list (open, or finished: a ticked-off shift with the same day and times " +
+  "is that shift) and shifts on days already " +
+  "past. If the app says a shift is already on the list, it wasn't added: say it was already on their list, " +
+  "never that you added it.\n" +
   "add_shift may only add shifts that are in a schedule photo (or your list of one); for anything else, use " +
   "the other tools as usual.\n\n";
 
@@ -420,7 +423,7 @@ export async function* chatAboutTasks(
     messages.push({
       role: "user",
       content: calls.map((call): Anthropic.ToolResultBlockParam => {
-        const result = queueChange(call, labels, queue, now.today);
+        const result = queueChange(call, labels, queue, now.today, snapshot.history.done);
         return { type: "tool_result", tool_use_id: call.id, content: result.message, is_error: !result.ok };
       }),
     });
@@ -467,11 +470,14 @@ type Queued = { ok: boolean; message: string };
 // answer goes back to Claude. tasks.ts checks everything again when the
 // change is actually made.
 // `today` (the user's date) is needed for shifts, which can't be in the past.
+// `finished`: tasks finished in the last 7 days, so a shift you already
+// worked and ticked off isn't added again.
 export function queueChange(
   call: Anthropic.ToolUseBlock,
   labels: Map<string, TaskDTO>,
   queue: ChatChange[],
   today?: string,
+  finished: TaskDTO[] = [],
 ): Queued {
   // Shifts from a schedule photo can go up to 20; other changes stop at 10.
   const isShift = call.name === "add_shift";
@@ -524,9 +530,20 @@ export function queueChange(
     if (start === end) return fail("a shift can't start and end at the same time.");
     const person = typeof input.person === "string" ? input.person.replace(/\s+/g, " ").trim().slice(0, 40) : "";
     const title = shiftTitle(start, end, person || null);
-    if ([...labels.values()].some((t) => t.title === title && t.dueDate === date)) {
-      return fail("that shift is already on the open task list; skip it and tell the user.");
+    // Already there: the same day, start and end, and the same person (or no
+    // name on one of them). Two different people's shifts are both allowed.
+    // Claude is told exactly which task it matched, so it can say so plainly.
+    const match = (t: TaskDTO) => t.dueDate === date && sameShift(t.title, title);
+    const open = [...labels.values()].find(match);
+    const done = open ? undefined : finished.find(match);
+    if (open || done) {
+      const where = open
+        ? `the open task ${JSON.stringify(open.title)} on that day`
+        : `${JSON.stringify(done!.title)} on that day, which the user already ticked off as finished`;
+      return fail(`that shift is already on the user's list: ${where}. It was NOT added; tell the user it was already there.`);
     }
+    const inReply = queue.some((c) => c.kind === "add" && c.shift && c.task.dueDate === date && sameShift(c.task.title, title));
+    if (inReply) return fail("that shift is already queued in this reply. Don't queue it again.");
     const shift = { title, dueDate: date, dueTime: start, category: "Work" };
     return enqueue({ kind: "add", task: shift, summary: describeAdd(shift), shift: true });
   }
@@ -703,6 +720,8 @@ function describeTaskList({ open, history, now, timeZone }: ChatSnapshot): strin
     .slice(0, CHAT_MAX_DONE)
     .map(({ day, task, repeating }) => {
       const parts = [task.title, `finished ${relDay(day, now.today)} (${day})`];
+      // The day it was due, so a shift ticked off early is still recognised as that shift.
+      if (!repeating && task.dueDate) parts.push(`was due ${task.dueDate}`);
       if (repeating) parts.push(`one round of a task that repeats ${task.repeat ?? ""}`.trim());
       if (task.category) parts.push(`category: ${task.category.name}`);
       return `- ${parts.join(" | ")}`;
