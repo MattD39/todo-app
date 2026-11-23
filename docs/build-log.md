@@ -315,3 +315,11 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** a 12-step checklist on the computer passed (send, remove,
     Stop and Try again, reload, wrong file type, Undo all, follow-up
     questions), and the photo checks passed (39 of 39).
+
+- **Nov 22 — Photo to schedule, part 2 tested on iPhone.** On the live site
+  as a home-screen app: the camera button offered Take Photo, Photo Library
+  and Choose File; a photo taken of a schedule on a computer screen came out
+  the right way up and its shifts were added; "only Marcus Bell's shifts"
+  added just that person's shifts from a team roster; the photo strip stayed
+  above the keyboard; and a reply finished while on another tab (dot on the
+  Chat tab). Undo all removed every test shift.
