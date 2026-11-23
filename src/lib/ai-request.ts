@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { unstable_rethrow } from "next/navigation";
 import { ClaudeError, type ChangeReport, type ChatTurn, type TaskForClaude } from "./ai";
-import { MAX_CHANGES_PER_MESSAGE } from "./chat-changes";
+import { MAX_SAVED_PER_MESSAGE } from "./chat-changes";
 import { MAX_CATEGORY, MAX_NOTES, MAX_STEPS, MAX_TITLE } from "./tasks";
 import { SIGNED_OUT_MESSAGE, type ProblemCode } from "./problems";
 import { LimitError, type ClaudeUse } from "./usage";
@@ -31,11 +31,19 @@ export function cleanChat(input: unknown): ChatTurn[] {
     const body = role ? text(value.text, role === "user" ? MAX_CHAT_MESSAGE : MAX_CHAT_REPLY) : "";
     const changes = role === "assistant" ? cleanReports(value.changes) : [];
     const stopped = role === "assistant" && value.stopped === true;
+    // Your message had a photo attached (the photo itself isn't sent again).
+    const hadPhoto = role === "user" && value.hadPhoto === true;
     // (A reply with no words still counts if it made changes or was stopped.)
     if (!role || (!body && changes.length === 0 && !stopped)) continue;
     // Two in a row from the same side (e.g. after a failed answer): keep the newer one.
     if (turns.at(-1)?.role === role) turns.pop();
-    turns.push({ role, text: body, ...(changes.length ? { changes } : {}), ...(stopped ? { stopped } : {}) });
+    turns.push({
+      role,
+      text: body,
+      ...(changes.length ? { changes } : {}),
+      ...(stopped ? { stopped } : {}),
+      ...(hadPhoto ? { hadPhoto } : {}),
+    });
   }
   while (turns.length > MAX_CHAT_TURNS) turns.shift();
   while (turns[0]?.role === "assistant") turns.shift();
@@ -45,7 +53,7 @@ export function cleanChat(input: unknown): ChatTurn[] {
 // What the chat says happened to a reply's changes. Odd entries are dropped.
 function cleanReports(input: unknown): ChangeReport[] {
   if (!Array.isArray(input)) return [];
-  return input.slice(0, MAX_CHANGES_PER_MESSAGE).flatMap((item): ChangeReport[] => {
+  return input.slice(0, MAX_SAVED_PER_MESSAGE).flatMap((item): ChangeReport[] => {
     const value = asRecord(item);
     const summary = text(value.summary, 300);
     const status = oneOf(value.status, ["saved", "undone", "failed", "unknown"]) as ChangeReport["status"] | "";

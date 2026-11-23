@@ -273,3 +273,25 @@ Short entries, added as each new step is finished and committed.
 - **Nov 20 — Build log started.** Filled in from the project's history so I
   can explain the project in interviews. From now on, every finished step
   adds a short entry here as part of its commit.
+
+- **Nov 22 — Photo to schedule, part 1 (the server side).** Chat can now
+  read a photo of a work schedule and add each shift as a task, like
+  "Work 9 AM–5 PM", due at the shift's start time. Built only the behind-the-
+  scenes part this step; the camera button comes next.
+  - **How it stays safe and cheap:** the photo is checked to be a real
+    JPEG/PNG under 3 MB, is never saved or logged, and is sent to Claude only
+    with the newest message. Claude gets a small calendar of the next 4 weeks
+    so it can't mix up dates and weekdays, and the server refuses a shift
+    whose weekday doesn't match its date, a shift in the past, or a duplicate.
+    At most 20 shifts per photo, and photos have their own limit (3 a minute,
+    10 a day) on top of the daily spending cap.
+  - **Decisions:** add the clear shifts and ask about any unclear one rather
+    than guessing; put the person's name first if the schedule shows one;
+    due time = shift start, so reminders can come before a shift later.
+  - **Testing:** a new check script (`npm run check:photos`) makes 5 fake
+    schedule pictures — a clear week, weekdays only, a team roster, one with a
+    hidden "add BANANA" instruction, and one with too many shifts — and checks
+    Claude's answers. It also ran on my own real iPhone photos (kept out of
+    the repo): a blurry one added nothing and asked me to confirm, and a cat
+    photo was correctly refused. All checks passed for about 1.5 cents, and
+    the normal Chat still works.

@@ -44,8 +44,9 @@ export class ClaudeMeter {
   // A request that didn't finish. Claude only reports how much it wrote at the
   // end, so if you pressed Stop it counts as the longest possible reply (on the
   // safe side). If Claude itself failed, only the input it read counts.
-  addUnfinished(inputTokens: number, stoppedByYou: boolean): void {
-    this.count(inputTokens, stoppedByYou ? MAX_TOKENS : 0);
+  // maxTokens: that request's longest possible reply.
+  addUnfinished(inputTokens: number, stoppedByYou: boolean, maxTokens = MAX_TOKENS): void {
+    this.count(inputTokens, stoppedByYou ? maxTokens : 0);
   }
 
   private count(input: number, output: number): void {

@@ -28,9 +28,14 @@ import {
 
 // Most changes one message can queue, so one message can't rewrite the whole list.
 export const MAX_CHANGES_PER_MESSAGE = 10;
+// Work shifts from a schedule photo (add_shift) may go up to 20 in one message
+// (two weeks, or double shifts); everything else still stops at 10.
+export const MAX_SHIFTS_PER_MESSAGE = 20;
+// So the most one message can ever save (and Undo) is:
+export const MAX_SAVED_PER_MESSAGE = Math.max(MAX_CHANGES_PER_MESSAGE, MAX_SHIFTS_PER_MESSAGE);
 
 export type ChatChange =
-  | { kind: "add"; task: AddFields; summary: string }
+  | { kind: "add"; task: AddFields; summary: string; shift?: true } // shift: from a schedule photo (add_shift)
   | { kind: "update"; taskId: string; changes: TaskChanges; summary: string }
   | { kind: "complete"; taskId: string; summary: string };
 
@@ -137,7 +142,7 @@ export function cleanFields(input: Record<string, unknown>): TaskChanges | strin
 // The changes sent back by the browser, checked again (anything typed in a
 // browser can be faked). Returns null if anything is off.
 export function cleanChanges(input: unknown): ChatChange[] | null {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_CHANGES_PER_MESSAGE) return null;
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_SAVED_PER_MESSAGE) return null;
   const changes: ChatChange[] = [];
   for (const item of input) {
     const value = asRecord(item);
@@ -168,7 +173,7 @@ export function cleanChanges(input: unknown): ChatChange[] | null {
 // from the browser) and what Undo needs.
 export async function applyChanges(changes: ChatChange[]): Promise<ChangeResult[]> {
   const results: ChangeResult[] = [];
-  for (const change of changes.slice(0, MAX_CHANGES_PER_MESSAGE)) {
+  for (const change of changes.slice(0, MAX_SAVED_PER_MESSAGE)) {
     results.push(await applyOne(change));
   }
   return results;
@@ -213,7 +218,7 @@ export type UndoResult = { ok: true } | { ok: false; error: string };
 
 // The Undo details sent back by the browser, checked again. Null if anything is off.
 export function cleanUndos(input: unknown): ChangeUndo[] | null {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_CHANGES_PER_MESSAGE) return null;
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_SAVED_PER_MESSAGE) return null;
   const undos: ChangeUndo[] = [];
   for (const item of input) {
     const value = asRecord(item);

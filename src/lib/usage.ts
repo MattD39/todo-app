@@ -1,7 +1,7 @@
 import "server-only";
 import { getCurrentUser } from "./auth";
 import { ClaudeMeter } from "./claude";
-import { runAsUser } from "./db";
+import { runAsUser, type Db } from "./db";
 import { getTimeZone } from "./timezone";
 import type { ClaudeFeature } from "@/generated/prisma/enums";
 
@@ -23,12 +23,25 @@ export type { ClaudeFeature };
 // costsMoney: false for changes made through the MCP server (Claude does the
 // thinking on the person's own Claude account), so the daily spending cap
 // doesn't apply to them and they never add to it.
-type Limit = { perMinute: number; perDay: number; name: string; costsMoney: boolean };
+// alsoCounts: other features whose uses count towards this limit too.
+// alsoWithin: other limits a use of this feature must also fit within.
+type Limit = {
+  perMinute: number;
+  perDay: number;
+  name: string;
+  costsMoney: boolean;
+  alsoCounts?: ClaudeFeature[];
+  alsoWithin?: ClaudeFeature[];
+};
 
 export const LIMITS: Record<ClaudeFeature, Limit> = {
   suggest_steps: { perMinute: 5, perDay: 30, name: "step suggestions", costsMoney: true },
   ask: { perMinute: 5, perDay: 30, name: "Ask Claude questions", costsMoney: true },
-  chat: { perMinute: 6, perDay: 40, name: "chat messages", costsMoney: true },
+  // A photo message is a chat message too, so it counts here as well.
+  chat: { perMinute: 6, perDay: 40, name: "chat messages", costsMoney: true, alsoCounts: ["chat_photo"] },
+  // Photo to schedule: a photo costs a few times a text message, so photos
+  // get their own, smaller limit, on top of the chat limit.
+  chat_photo: { perMinute: 3, perDay: 10, name: "photo messages", costsMoney: true, alsoWithin: ["chat"] },
   // A safety net in case a Claude chat goes wrong and keeps changing tasks.
   // Reading through the MCP server isn't limited.
   mcp_change: { perMinute: 20, perDay: 200, name: "changes through Claude", costsMoney: false },
@@ -88,35 +101,15 @@ export async function startClaudeUseFor(userId: string, timeZone: string, featur
     // transaction ends.)
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('claude-usage:' || ${user.id}))`;
 
-    // All the times come from the database clock. Midnight is worked out in
-    // the person's time zone (Postgres knows the same names as the browser).
-    // A use counts towards the daily limit unless Claude failed before doing
-    // anything (finished with nothing read or written), e.g. Claude was busy.
-    // (MCP changes are never "finished", so they always count: see countMcpChange.)
-    const [counts] = await tx.$queryRaw<UsageCounts[]>`
-      WITH day AS (
-        SELECT (date_trunc('day', now() AT TIME ZONE ${timeZone}) AT TIME ZONE ${timeZone}) AS starts,
-               ((date_trunc('day', now() AT TIME ZONE ${timeZone}) + interval '1 day') AT TIME ZONE ${timeZone}) AS ends
-      )
-      SELECT
-        count(*) FILTER (WHERE u."feature" = ${feature}::"ClaudeFeature"
-                           AND u."startedAt" > now() - interval '1 minute')::int AS "lastMinute",
-        ceil(extract(epoch FROM min(u."startedAt") FILTER (WHERE u."feature" = ${feature}::"ClaudeFeature"
-                           AND u."startedAt" > now() - interval '1 minute') + interval '1 minute' - now()))::int
-          AS "minuteFreesIn",
-        count(*) FILTER (WHERE u."feature" = ${feature}::"ClaudeFeature"
-                           AND u."startedAt" >= day.starts
-                           AND NOT (u."finishedAt" IS NOT NULL AND u."inputTokens" = 0 AND u."outputTokens" = 0))::int
-          AS "today",
-        coalesce(sum(u."costUsd") FILTER (WHERE u."startedAt" >= day.starts), 0)::float8 AS "spentToday",
-        ceil(extract(epoch FROM day.ends - now()))::int AS "dayEndsIn"
-      FROM day
-      LEFT JOIN "ClaudeUsage" u
-        ON u."userId" = ${user.id}::uuid
-       AND u."startedAt" >= least(day.starts, now() - interval '1 minute')
-      GROUP BY day.starts, day.ends`;
-
+    // This feature's own limit first (its message is the one you'd expect),
+    // then any other limit it also has to fit within (a photo message is a
+    // chat message too). leftToday is about this feature's own limit.
+    const counts = await countUses(tx, user.id, timeZone, [feature, ...(limit.alsoCounts ?? [])]);
     checkLimits(limit, counts);
+    for (const other of limit.alsoWithin ?? []) {
+      const otherLimit = LIMITS[other];
+      checkLimits(otherLimit, await countUses(tx, user.id, timeZone, [other, ...(otherLimit.alsoCounts ?? [])]));
+    }
 
     // Written by hand: the database only lets the app fill in these three
     // columns (Prisma's create would send the others too). startedAt comes
@@ -153,6 +146,39 @@ export async function startClaudeUseFor(userId: string, timeZone: string, featur
       }
     },
   };
+}
+
+// How much the person has used `features` (together): in the last minute and
+// today, plus what they've spent today on all features.
+// All the times come from the database clock. Midnight is worked out in
+// the person's time zone (Postgres knows the same names as the browser).
+// A use counts towards the daily limit unless Claude failed before doing
+// anything (finished with nothing read or written), e.g. Claude was busy.
+// (MCP changes are never "finished", so they always count: see countMcpChange.)
+async function countUses(tx: Db, userId: string, timeZone: string, features: ClaudeFeature[]): Promise<UsageCounts> {
+  const [counts] = await tx.$queryRaw<UsageCounts[]>`
+    WITH day AS (
+      SELECT (date_trunc('day', now() AT TIME ZONE ${timeZone}) AT TIME ZONE ${timeZone}) AS starts,
+             ((date_trunc('day', now() AT TIME ZONE ${timeZone}) + interval '1 day') AT TIME ZONE ${timeZone}) AS ends
+    )
+    SELECT
+      count(*) FILTER (WHERE u."feature"::text = ANY(${features}::text[])
+                         AND u."startedAt" > now() - interval '1 minute')::int AS "lastMinute",
+      ceil(extract(epoch FROM min(u."startedAt") FILTER (WHERE u."feature"::text = ANY(${features}::text[])
+                         AND u."startedAt" > now() - interval '1 minute') + interval '1 minute' - now()))::int
+        AS "minuteFreesIn",
+      count(*) FILTER (WHERE u."feature"::text = ANY(${features}::text[])
+                         AND u."startedAt" >= day.starts
+                         AND NOT (u."finishedAt" IS NOT NULL AND u."inputTokens" = 0 AND u."outputTokens" = 0))::int
+        AS "today",
+      coalesce(sum(u."costUsd") FILTER (WHERE u."startedAt" >= day.starts), 0)::float8 AS "spentToday",
+      ceil(extract(epoch FROM day.ends - now()))::int AS "dayEndsIn"
+    FROM day
+    LEFT JOIN "ClaudeUsage" u
+      ON u."userId" = ${userId}::uuid
+     AND u."startedAt" >= least(day.starts, now() - interval '1 minute')
+    GROUP BY day.starts, day.ends`;
+  return counts;
 }
 
 type UsageCounts = {
