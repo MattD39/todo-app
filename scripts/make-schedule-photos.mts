@@ -211,3 +211,69 @@ await save(
       }),
   ),
 );
+
+// 6. One person's week where a coffee stain hides Thursday's time, so Claude
+// must ask about that one shift (and the follow-up "Thursday is 10 to 6").
+await save(
+  "6-coffee-stain.png",
+  page(
+    1600,
+    1150,
+    heading([
+      { text: "Pinecrest Pharmacy", size: 56, bold: true },
+      { text: "Staff Schedule: Riley Chen", size: 38 },
+      { text: "Week of Nov 30 – Dec 6, 2026", size: 34, color: "#4a5a5a" },
+    ]) +
+      table({
+        x: 80,
+        y: 330,
+        widths: [260, 300, 880],
+        rowHeight: 96,
+        header: ["Day", "Date", "Shift"],
+        rows: [
+          ["Mon", "Nov 30", "8:00 AM – 4:00 PM"],
+          ["Tue", "Dec 1", "OFF"],
+          ["Wed", "Dec 2", "11:00 AM – 7:00 PM"],
+          ["Thu", "Dec 3", "10:00 AM – 6:00 PM"],
+          ["Fri", "Dec 4", "8:00 AM – 4:00 PM"],
+          ["Sat", "Dec 5", "OFF"],
+          ["Sun", "Dec 6", "9:00 AM – 1:00 PM"],
+        ],
+      }) +
+      // The stain covers Thursday's shift completely (row 4 of the table).
+      `<ellipse cx="900" cy="756" rx="400" ry="62" fill="#7a4a22"/>` +
+      `<ellipse cx="880" cy="752" rx="330" ry="44" fill="#8f5a2c"/>` +
+      `<circle cx="1330" cy="700" r="22" fill="#7a4a22"/><circle cx="560" cy="810" r="14" fill="#7a4a22"/>`,
+  ),
+);
+
+// 7. One person's week, for the clash check: Monday's 9–5 is put on the list
+// first as "Elena work 9 AM–5 PM", then this photo is sent.
+await save(
+  "7-one-person.png",
+  page(
+    1600,
+    1150,
+    heading([
+      { text: "Lakeside Cinema", size: 56, bold: true },
+      { text: "Staff Schedule: Casey Morgan", size: 38 },
+      { text: "Week of Dec 7 – Dec 13, 2026", size: 34, color: "#4a5a5a" },
+    ]) +
+      table({
+        x: 80,
+        y: 330,
+        widths: [260, 300, 880],
+        rowHeight: 96,
+        header: ["Day", "Date", "Shift"],
+        rows: [
+          ["Mon", "Dec 7", "9:00 AM – 5:00 PM"],
+          ["Tue", "Dec 8", "OFF"],
+          ["Wed", "Dec 9", "4:00 PM – 11:00 PM"],
+          ["Thu", "Dec 10", "OFF"],
+          ["Fri", "Dec 11", "5:00 PM – 11:00 PM"],
+          ["Sat", "Dec 12", "12:00 PM – 8:00 PM"],
+          ["Sun", "Dec 13", "OFF"],
+        ],
+      }),
+  ),
+);

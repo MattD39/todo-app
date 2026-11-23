@@ -13,7 +13,15 @@ import {
   type ChatChange,
 } from "./chat-changes";
 import { addDays, dayOf, formatDay, formatTime, isOverdue, isValidDay, relDay, type Now } from "./dates";
-import { describeCalendar, sameShift, shiftTitle, weekdayOf, WEEKDAYS, type ChatPhoto } from "./schedule-photo";
+import {
+  describeCalendar,
+  sameShift,
+  shiftPerson,
+  shiftTitle,
+  weekdayOf,
+  WEEKDAYS,
+  type ChatPhoto,
+} from "./schedule-photo";
 import { MAX_NOTES, MAX_TITLE, type HistoryDTO, type TaskChanges, type TaskDTO } from "./tasks";
 
 // The app's Claude features. Each one builds a prompt from the task, asks
@@ -149,16 +157,20 @@ const SCHEDULE_PHOTO_RULES =
   "1. Start every reply to a photo with what you read, as a plain list headed \"Here's what I read:\", one " +
   'line per shift like "- Mon, Nov 23: 9 AM–5 PM", saying whose schedule it is and which week if shown. ' +
   "In later messages, use that list; you can't see the photo any more.\n" +
-  "2. Whose shifts: if the photo shows more than one person and the user hasn't said whose shifts to add, " +
+  "2. Whose shifts: a photo with only one person's shifts (one name printed on it, or none) is the user's own " +
+  "schedule: don't ask whose it is, and leave person null. Names on tasks already on their list never make " +
+  "that unclear. If the photo shows more than one person and the user hasn't said whose shifts to add, " +
   "list the names you see, ask whose, and add nothing yet. Fill in person only when the user named " +
   "whose shifts they are (it goes in the task's title).\n" +
   "3. Which dates: use the CALENDAR in the message for every date. If the photo shows dates, use them (no " +
   "year shown: the year that puts them nearest today). If it shows only weekdays, use the week the user " +
   "named (like \"next week\"); if they didn't name one, ask which week, suggest the most likely one with " +
   "its Monday's date, and add nothing yet.\n" +
-  "4. Once whose shifts and which week are clear, add every shift you can read clearly, one add_shift each, " +
-  "with its weekday. If a shift's time is unreadable, or AM/PM is genuinely unclear, don't add that one: ask " +
-  'about it. Common shift times like "9-5" mean 9 AM to 5 PM. Days off (OFF, blank, a dash) aren\'t tasks. ' +
+  "4. Once whose shifts and which week are clear, add every shift you can read clearly in that same reply, " +
+  'one add_shift each, with its weekday. Don\'t ask "Are these your shifts?" or for any other go-ahead ' +
+  "first: the user can Undo any of them. If a shift's time is unreadable, or AM/PM is genuinely unclear, " +
+  "don't add that one: ask about it (still add the clear ones). " +
+  'Common shift times like "9-5" mean 9 AM to 5 PM. Days off (OFF, blank, a dash) aren\'t tasks. ' +
   "A shift ending after midnight goes on the day it starts.\n" +
   `5. If there are more than ${MAX_SHIFTS_PER_MESSAGE} shifts to add, add none: say so and ask for one week ` +
   "at a time.\n" +
@@ -166,7 +178,17 @@ const SCHEDULE_PHOTO_RULES =
   "7. Skip shifts already on the task list (open, or finished: a ticked-off shift with the same day and times " +
   "is that shift) and shifts on days already " +
   "past. If the app says a shift is already on the list, it wasn't added: say it was already on their list, " +
-  "never that you added it.\n" +
+  "never that you added it. If the app says a shift matches a task with a name on it, ask the question the " +
+  "app tells you to, about that shift only.\n" +
+  "8. Follow-ups: in later messages the user may point at shifts from your list (\"you missed Thursday\", " +
+  '"add Saturday too") or tell you a shift\'s time ("Thursday is 10 to 6"). That clearly asks you to add ' +
+  "them: add only the shifts they point at, with the time they give or the time in your list, calling " +
+  "add_shift in that same reply (never just say you'll add it). Person follows rule 2: only a name the user " +
+  "gave (in this message or when they said whose shifts to add), never a name printed on the schedule; " +
+  "otherwise null. Never add the rest of the list again. If that day isn't in " +
+  "your list, or you read it as a day off or couldn't read it, and they didn't give a time: don't guess; " +
+  "say what you read and ask for the time (or for the photo again). The app's notes and the task list show " +
+  "what was really added: trust them over your earlier words.\n" +
   "add_shift may only add shifts that are in a schedule photo (or your list of one); for anything else, use " +
   "the other tools as usual.\n\n";
 
@@ -191,7 +213,8 @@ const CHAT_PROMPT =
   "they can tap the task on another tab to do it themselves.\n\n" +
   "WHEN TO CHANGE TASKS. Only use the tools when the user's newest message clearly asks for a change " +
   '(like "add milk for Friday" or "tick off the gym"), or is a clear yes ("yes", "yes please", "go ahead", ' +
-  '"do it") to one specific change you asked about in your previous message. A vague, unclear or one-word ' +
+  '"do it") to one specific change you asked about in your previous message (pointing at a shift you missed ' +
+  "from a schedule photo counts too: see rule 8 under SCHEDULE PHOTOS). A vague, unclear or one-word " +
   'reply ("can", "ok?", "hmm", "maybe", "sure?", a typo) is NOT a yes: change nothing and briefly ask what ' +
   "they'd like. When in doubt, ask; never guess a change.\n\n" +
   "How changes happen: the tools only queue a change, and nothing is saved while you're writing. When " +
@@ -534,12 +557,28 @@ export function queueChange(
     // name on one of them). Two different people's shifts are both allowed.
     // Claude is told exactly which task it matched, so it can say so plainly.
     const match = (t: TaskDTO) => t.dueDate === date && sameShift(t.title, title);
-    const open = [...labels.values()].find(match);
-    const done = open ? undefined : finished.find(match);
-    if (open || done) {
-      const where = open
-        ? `the open task ${JSON.stringify(open.title)} on that day`
-        : `${JSON.stringify(done!.title)} on that day, which the user already ticked off as finished`;
+    const openMatches = [...labels.values()].filter(match);
+    const matches = [...openMatches, ...finished.filter(match)];
+    // Someone's name on it while this shift has none: see below. Any other
+    // match is simply "already there", and wins (no question needed).
+    const named = (t: TaskDTO) => !person && Boolean(shiftPerson(t.title));
+    const found = matches.find((t) => !named(t)) ?? matches[0];
+    if (found) {
+      const where = openMatches.includes(found)
+        ? `the open task ${JSON.stringify(found.title)} on that day`
+        : `${JSON.stringify(found.title)} on that day, which the user already ticked off as finished`;
+      // The one on the list has someone's name and this one has none: it may
+      // be someone else's shift (the user typed in Elena's) and not theirs, so
+      // Claude asks instead of saying "already there". To add it as a separate
+      // shift it needs a name, or it would still count as the same one.
+      if (named(found)) {
+        return fail(
+          `that shift matches ${where} (same day and times, but that one has a name and this one doesn't). It was ` +
+            "NOT added. Tell the user it matched that task and ask whether it's the same shift. If it's a separate " +
+            "shift, ask what name to put on it (like their own name), then add it with that person. Ask about this " +
+            "shift only; it doesn't stop you adding the others.",
+        );
+      }
       return fail(`that shift is already on the user's list: ${where}. It was NOT added; tell the user it was already there.`);
     }
     const inReply = queue.some((c) => c.kind === "add" && c.shift && c.task.dueDate === date && sameShift(c.task.title, title));

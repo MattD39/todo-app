@@ -108,6 +108,12 @@ export function sameShift(a: string, b: string): boolean {
   return x.person === y.person || x.person === "" || y.person === "";
 }
 
+// The name in front of a shift title, in small letters: "Elena work 9 AM–5 PM"
+// → "elena", "Work 9 AM–5 PM" → "" (no name). Null if it isn't a shift title.
+export function shiftPerson(title: string): string | null {
+  return shiftParts(title)?.person ?? null;
+}
+
 function shortTime(time: string): string {
   const [h, m] = time.split(":").map(Number);
   return `${h % 12 || 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h >= 12 ? "PM" : "AM"}`;

@@ -359,3 +359,28 @@ Short entries, added as each new step is finished and committed.
   - **Noted for next step:** with someone else's shift on the list, Claude
     asked "Are these your shifts?" before adding anything, instead of adding
     the clear shifts and asking only about the unclear one.
+
+- **Nov 23 — Photo to schedule, part 3b: follow-ups, and no needless
+  questions.** Claude now adds every shift it can read straight away and asks
+  only about the ones it can't: no more "Are these your shifts?" first, since
+  every added shift has an Undo button.
+  - **Follow-ups:** messages like "you missed Thursday", "add Saturday too" or
+    "Thursday is 10 to 6" add just that shift, using the list of what Claude
+    read from the photo (the photo itself is never sent again). If Claude read
+    that day as a day off or couldn't read it, it asks for the time instead of
+    guessing.
+  - **Clashes (my decision):** the duplicate rule from part 3a stays. The one
+    case where Claude now asks instead of saying "already there": the list has
+    a shift with someone's name on it, like "Elena work 9 AM–5 PM", and the
+    photo's shift at the same time has no name. It may be someone else's shift
+    the user typed in, so Claude asks whether it's the same one, and if not,
+    what name to put on it.
+  - **Problems found by the checks:** (1) on a follow-up, Claude put the name
+    printed on the schedule into the task title. Cause: its instructions said
+    to use "the same person as the other shifts", which it read as the printed
+    name. Fix: only a name the user typed counts. (2) Claude once wrote "I'll
+    add it" without actually adding it. Fix: it's told to add the shift in
+    that same reply.
+  - **Testing:** 2 new made-up schedules (one with a coffee stain hiding a
+    day), 4 new free checks and 12 new live checks, including scripted
+    follow-up conversations (passed 5 runs in a row), and 9 tests in the app.

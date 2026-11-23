@@ -171,9 +171,29 @@ check(
   "duplicate: no name on the list, new one with a name, is refused",
   refusedAsOnList(ai.queueChange(mondayShift("Elena"), onMonday("Work 9 AM–5 PM"), [], NOW.today)),
 );
+// 5c-2a: a name on the list and none on the new one may be someone else's
+// shift, so it isn't added and Claude is told to ask about it.
+const clash = ai.queueChange(mondayShift(null), onMonday("Elena work 9 AM–5 PM"), [], NOW.today);
 check(
-  "duplicate: a name on the list, new one with no name, is refused",
-  refusedAsOnList(ai.queueChange(mondayShift(null), onMonday("Elena work 9 AM–5 PM"), [], NOW.today)),
+  "clash: a name on the list, new one with no name, is NOT added, and Claude is told to ask",
+  !clash.ok && /NOT added/.test(clash.message) && /ask whether it's the same shift/.test(clash.message),
+  clash.message,
+);
+check(
+  "clash: once the user gives their name (Matt), it's added as a separate shift",
+  ai.queueChange(mondayShift("Matt"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today).ok,
+);
+const elenaAndMine = new Map([
+  ["T1", task("t1", "Elena work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" })],
+  ["T2", task("t2", "Work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" })],
+]);
+check(
+  "no clash question when a plain match is there too (Elena's and the user's own)",
+  refusedAsOnList(ai.queueChange(mondayShift(null), elenaAndMine, [], NOW.today)),
+);
+check(
+  "no clash question when the names match: just \"already on the list\"",
+  refusedAsOnList(ai.queueChange(mondayShift("Elena"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today)),
 );
 check(
   "duplicate: the same name in different capitals is refused",
@@ -368,7 +388,117 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
   check(
     "never claims it's adding one",
     !/\b(I'm (only )?adding|I'll (only )?add|I've added|I added)\b/i.test(r.reply),
+    r.reply,
   );
+
+  // 1d (5c-2a). Follow-ups after photo 1, text only. Claude's earlier reply is
+  // written here (so it's the same every run): it read all 5 shifts, but only
+  // 4 were saved. Thursday's is missing.
+  const readList =
+    "Here's what I read (Jordan Lee, Harbourview Café, week of Nov 23 – Nov 29):\n" +
+    "- Mon, Nov 23: 9 AM–5 PM\n- Tue, Nov 24: OFF\n- Wed, Nov 25: 12 PM–8 PM\n- Thu, Nov 26: 7 AM–3 PM\n" +
+    "- Fri, Nov 27: 9 AM–5 PM\n- Sat, Nov 28: 10 AM–6:30 PM\n- Sun, Nov 29: OFF\n\nI'll add your shifts.";
+  // The ✓ lines and tasks for shifts that were saved, built the way the app builds them.
+  const saved = (shifts: [string, string, string][], person: string | null = null) => {
+    const q: ChatChange[] = [];
+    for (const [date, start, end] of shifts) {
+      ai.queueChange(shiftCall(date, sp.weekdayOf(date), start, end, person), noTasks, q, NOW.today);
+    }
+    const adds = q.filter((c): c is Extract<ChatChange, { kind: "add" }> => c.kind === "add");
+    return {
+      reports: adds.map((c) => ({ summary: c.summary, status: "saved" as const })),
+      tasks: adds.map((c, i) => task(`s${i}`, c.task.title, { dueDate: c.task.dueDate, dueTime: c.task.dueTime })),
+    };
+  };
+  const fourSaved = saved([
+    ["2026-11-23", "09:00", "17:00"],
+    ["2026-11-25", "12:00", "20:00"],
+    ["2026-11-27", "09:00", "17:00"],
+    ["2026-11-28", "10:00", "18:30"],
+  ]);
+  const afterPhoto1 = (followUp: string): ChatTurn[] => [
+    user("Add these shifts please.", true),
+    { role: "assistant", text: readList, changes: fourSaved.reports },
+    user(followUp),
+  ];
+  const listAfter1 = [task("m1", "Buy milk"), ...fourSaved.tasks];
+  console.log('\n1d. Follow-up (no photo): "You missed Thursday." (Thursday wasn\'t saved)');
+  r = await ask(afterPhoto1("You missed Thursday."), null, listAfter1);
+  check("adds only Thursday, from its list", same(r.queue, ["2026-11-26 07:00 Work 7 AM–3 PM"]), JSON.stringify(shiftsOf(r.queue)));
+
+  console.log('\n1e. Follow-up: "You missed Monday." (Monday is already on the list)');
+  r = await ask(afterPhoto1("You missed Monday."), null, listAfter1);
+  check("adds nothing", r.queue.length === 0, JSON.stringify(shiftsOf(r.queue)));
+  check("says Monday is already there", /already/i.test(r.reply));
+
+  console.log('\n1f. Follow-up: "You missed Tuesday." (it read Tuesday as OFF)');
+  r = await ask(afterPhoto1("You missed Tuesday."), null, listAfter1);
+  check("adds nothing (doesn't guess a time)", r.queue.length === 0, JSON.stringify(shiftsOf(r.queue)));
+  check("says it read Tuesday as off and asks for the time", /off/i.test(r.reply) && /\?|tell me/i.test(r.reply), r.reply);
+
+  console.log('\n1g. Follow-up: "Sunday I\'m actually working 11am to 7pm." (gives the time)');
+  r = await ask(afterPhoto1("Sunday I'm actually working 11am to 7pm."), null, listAfter1);
+  check("adds Sunday at the time given", same(r.queue, ["2026-11-29 11:00 Work 11 AM–7 PM"]), JSON.stringify(shiftsOf(r.queue)));
+
+  // 6 (5c-2a). Thursday hidden by a stain: add the rest now, ask about Thursday.
+  photo = await scenario("6. One person's week, Thursday hidden by a coffee stain", "6-coffee-stain.png");
+  r = await ask([user("Add these shifts please.")], photo);
+  const riley = [
+    "2026-11-30 08:00 Work 8 AM–4 PM",
+    "2026-12-02 11:00 Work 11 AM–7 PM",
+    "2026-12-04 08:00 Work 8 AM–4 PM",
+    "2026-12-06 09:00 Work 9 AM–1 PM",
+  ];
+  check("adds the 4 clear shifts straight away", same(r.queue, riley), JSON.stringify(shiftsOf(r.queue)));
+  check("asks about Thursday", /thu/i.test(r.reply) && r.reply.includes("?"));
+  console.log('\n6b. Follow-up (no photo): "Thursday is 10 to 6."');
+  const rileySaved = saved([
+    ["2026-11-30", "08:00", "16:00"],
+    ["2026-12-02", "11:00", "19:00"],
+    ["2026-12-04", "08:00", "16:00"],
+    ["2026-12-06", "09:00", "13:00"],
+  ]);
+  const r6 = await ask(
+    [
+      user("Add these shifts please.", true),
+      { role: "assistant", text: r.reply, changes: rileySaved.reports },
+      user("Thursday is 10 to 6."),
+    ],
+    null,
+    [task("m1", "Buy milk"), ...rileySaved.tasks],
+  );
+  check("adds only Thursday, 10 AM–6 PM", same(r6.queue, ["2026-12-03 10:00 Work 10 AM–6 PM"]), JSON.stringify(shiftsOf(r6.queue)));
+
+  // 7 (5c-2a). The user's own one-person schedule, while someone else's shift
+  // ("Elena work 9 AM–5 PM") is on the list at Monday's time. Adds the others
+  // straight away (no "Are these your shifts?"), asks only about Monday.
+  photo = await scenario("7. One person's week, Elena's 9–5 already on the list on Monday", "7-one-person.png");
+  const elenaMonday = task("e1", "Elena work 9 AM–5 PM", { dueDate: "2026-12-07", dueTime: "09:00" });
+  r = await ask([user("Add these shifts please.")], photo, [task("m1", "Buy milk"), elenaMonday]);
+  const casey = [
+    "2026-12-09 16:00 Work 4 PM–11 PM",
+    "2026-12-11 17:00 Work 5 PM–11 PM",
+    "2026-12-12 12:00 Work 12 PM–8 PM",
+  ];
+  check("adds the other 3 shifts straight away", same(r.queue, casey), JSON.stringify(shiftsOf(r.queue)));
+  check("asks about Monday, naming Elena's task", /elena/i.test(r.reply) && r.reply.includes("?"));
+  check("doesn't ask whether these are your shifts", !/are (these|they) (all )?(your|yours|your own)\b/i.test(r.reply));
+  console.log('\n7b. Follow-up (no photo): "It\'s a separate shift, it\'s mine. Put my name on it: Matt."');
+  const caseySaved = saved([
+    ["2026-12-09", "16:00", "23:00"],
+    ["2026-12-11", "17:00", "23:00"],
+    ["2026-12-12", "12:00", "20:00"],
+  ]);
+  const r7 = await ask(
+    [
+      user("Add these shifts please.", true),
+      { role: "assistant", text: r.reply, changes: caseySaved.reports },
+      user("It's a separate shift, it's mine. Put my name on it: Matt."),
+    ],
+    null,
+    [task("m1", "Buy milk"), elenaMonday, ...caseySaved.tasks],
+  );
+  check("adds Monday as Matt's shift", same(r7.queue, ["2026-12-07 09:00 Matt work 9 AM–5 PM"]), JSON.stringify(shiftsOf(r7.queue)));
 
   // 2. Weekdays only: must ask which week, then use the answer.
   photo = await scenario("2. Weekdays only, no dates", "2-weekdays-only.png");
@@ -447,7 +577,7 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     .split("\n")
     .filter((line) => !line.trim().startsWith("-"))
     .join(" ");
-  check("says there are too many to add at once", /more than|too many|at most|up to|limit/i.test(afterList), afterList);
+  check("says there are too many to add at once", /more than|too many|at most|up to|limit|over the/i.test(afterList), afterList);
 
   // ─── Part 3: your own photos ─────────────────────────────────────────────
   const mineDir = path.join(photosDir, "mine");
