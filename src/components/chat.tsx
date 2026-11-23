@@ -2,9 +2,11 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
+  attachPhoto,
   chatViewOpened,
   clearChat,
   clearChatError,
+  photoForRetry,
   sendChat,
   setDraft,
   stopChat,
@@ -17,6 +19,7 @@ import { leftTodayNote } from "./api-problem";
 import { ConfirmDialog } from "./confirm-dialog";
 import { input } from "./form-styles";
 import { ProblemNote } from "./problem-note";
+import { shrinkPhoto, type ReadyPhoto } from "./shrink-photo";
 
 // The Chat tab: talk to Claude about all your tasks.
 //
@@ -34,12 +37,15 @@ const STARTERS = [
 ];
 
 export function Chat() {
-  const { messages, draft, sending, savingNow, undoing, error, leftToday } =
+  const { messages, draft, sending, savingNow, undoing, error, leftToday, leftFor, attached } =
     useChat();
-  // "3 chat messages left today." under the newest reply, when close to the limit.
+  // "3 chat messages left today." under the newest reply, when close to the
+  // limit. After a photo message it's about photos, which have their own limit.
   const leftNote =
     !sending && messages.length > 0
-      ? leftTodayNote(leftToday, "chat message", "chat messages")
+      ? leftFor === "photo"
+        ? leftTodayNote(leftToday, "photo message", "photo messages")
+        : leftTodayNote(leftToday, "chat message", "chat messages")
       : "";
   // Try again / Edit after a stopped reply. Off for a moment right after Stop,
   // so fast clicking can't hit them by accident.
@@ -48,6 +54,11 @@ export function Chat() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const composerRef = useRef<HTMLFormElement>(null);
+  // Photo to schedule: the hidden file picker behind the 📷 button, whether a
+  // picked photo is being shrunk, and a note about the photo (e.g. "too big").
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [preparingPhoto, setPreparingPhoto] = useState(false);
+  const [photoNote, setPhotoNote] = useState("");
 
   useKeepAboveKeyboard(composerRef);
 
@@ -77,11 +88,67 @@ export function Chat() {
   // The message to offer Try again / Edit for: its reply was stopped, or it wasn't sent.
   const stoppedMessage = stoppedMessageOf(messages);
 
-  function send(text: string, options?: { replaceStopped?: boolean }) {
-    if (!text.trim() || sending || undoing) return;
+  function send(
+    text: string,
+    options?: { replaceStopped?: boolean; photo?: ReadyPhoto | null },
+  ) {
+    const photo = options?.photo === undefined ? attached : options.photo;
+    if ((!text.trim() && !photo) || sending || undoing || preparingPhoto) return;
     setEditingStopped(false);
+    setPhotoNote("");
     followRef.current = true; // you just sent something: show the reply
     void sendChat(text, options);
+  }
+
+  // A photo was picked: shrink it on this device, then show it above the box.
+  async function photoPicked(file: File | undefined) {
+    if (fileRef.current) fileRef.current.value = ""; // so picking the same photo again still works
+    if (!file) return;
+    setPhotoNote("");
+    setPreparingPhoto(true);
+    try {
+      const result = await shrinkPhoto(file);
+      if (typeof result === "string") {
+        setPhotoNote(result);
+      } else {
+        attachPhoto(result);
+        if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+          inputRef.current?.focus({ preventScroll: true });
+        }
+      }
+    } finally {
+      setPreparingPhoto(false);
+    }
+  }
+
+  // Try again / Edit of a message that had a photo, after the photo is gone
+  // from memory (a reload): the words go back in the box, and you pick the
+  // photo again.
+  const PICK_AGAIN =
+    "The photo isn't kept after a reload. Pick it again with 📷, then Send.";
+
+  function retry(message: ChatMessage) {
+    if (!message.hadPhoto) {
+      send(message.text, { replaceStopped: true, photo: null });
+      return;
+    }
+    const photo = photoForRetry();
+    if (photo) {
+      send(message.text, { replaceStopped: true, photo });
+    } else {
+      edit(message);
+    }
+  }
+
+  function edit(message: ChatMessage) {
+    setDraft(message.text);
+    setEditingStopped(true);
+    if (message.hadPhoto) {
+      const photo = photoForRetry();
+      if (photo) attachPhoto(photo);
+      else setPhotoNote(PICK_AGAIN);
+    }
+    inputRef.current?.focus();
   }
 
   function undo(at: number, which: number[]) {
@@ -105,7 +172,8 @@ export function Chat() {
           <p className="text-muted">
             Ask Claude about your tasks: what&apos;s due, what to do first, or
             how your week went. Claude can also add tasks, change them or tick
-            them off for you.
+            them off for you. Tap the camera to send a photo of your work
+            schedule, and Claude will add your shifts.
           </p>
           <div className="flex flex-wrap gap-2">
             {STARTERS.map((starter) => (
@@ -137,8 +205,17 @@ export function Chat() {
                       : "self-start rounded-bl-md border border-line bg-surface text-ink"
                   }`}
                 >
+                  {m.hadPhoto && (
+                    <span className="block text-[0.85rem] font-bold opacity-85">
+                      📷 Photo
+                    </span>
+                  )}
                   {thinking ? (
-                    <span className="text-muted">Claude is thinking…</span>
+                    <span className="text-muted">
+                      {messages[i - 1]?.hadPhoto
+                        ? "Claude is reading your photo…"
+                        : "Claude is thinking…"}
+                    </span>
                   ) : (
                     m.text
                   )}
@@ -177,7 +254,7 @@ export function Chat() {
               <button
                 type="button"
                 disabled={!retryReady}
-                onClick={() => send(stoppedMessage, { replaceStopped: true })}
+                onClick={() => retry(stoppedMessage)}
                 className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
               >
                 Try again
@@ -185,11 +262,7 @@ export function Chat() {
               <button
                 type="button"
                 disabled={!retryReady}
-                onClick={() => {
-                  setDraft(stoppedMessage);
-                  setEditingStopped(true);
-                  inputRef.current?.focus();
-                }}
+                onClick={() => edit(stoppedMessage)}
                 className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
               >
                 Edit
@@ -207,6 +280,10 @@ export function Chat() {
         </div>
       )}
 
+      {/* Room for the photo strip above the message bar, so it never covers
+          the newest message. */}
+      {(attached || preparingPhoto || photoNote) && <div aria-hidden className="h-20" />}
+
       {/* Sits just above the tab bar (or above the keyboard while typing). */}
       <form
         ref={composerRef}
@@ -216,6 +293,39 @@ export function Chat() {
         }}
         className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] z-[6] border-t border-line bg-bg"
       >
+        {/* The photo going with your next message (or a note about it). */}
+        {(attached || preparingPhoto || photoNote) && (
+          <div className="mx-auto flex max-w-[640px] items-center gap-3 px-4 pt-2.5">
+            {attached && (
+              <div className="relative flex-none">
+                {/* A data: URL made on this device, so next/image has nothing to optimise. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={attached.dataUrl}
+                  alt="Photo to send"
+                  className="size-16 rounded-[10px] border border-line object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => attachPhoto(null)}
+                  aria-label="Remove photo"
+                  title="Remove photo"
+                  className="absolute -top-2 -right-2 flex size-7 items-center justify-center rounded-full border border-line bg-surface text-[0.9rem] font-bold text-ink shadow"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <p
+              className={`text-[0.85rem] ${photoNote ? "font-bold text-high" : "text-muted"}`}
+            >
+              {preparingPhoto
+                ? "Getting the photo ready…"
+                : photoNote ||
+                  "Claude will read the schedule and add your shifts. Add a note if you like."}
+            </p>
+          </div>
+        )}
         <div className="mx-auto flex max-w-[640px] gap-2 px-4 py-2.5">
           {/* Always on screen, so a long chat needs no scrolling to clear. It sits
               near Send, so it asks first. */}
@@ -241,6 +351,37 @@ export function Chat() {
               </svg>
             </button>
           )}
+          {/* Photo to schedule. On iPhone this offers Take Photo, Photo
+              Library or Choose File. */}
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={sending || preparingPhoto}
+            aria-label="Add a photo of a schedule"
+            title="Add a photo of a schedule"
+            className="flex w-11 flex-none items-center justify-center rounded-[10px] border border-line bg-surface text-muted disabled:opacity-50"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+              className="size-5"
+            >
+              <path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+              <circle cx="12" cy="13" r="3.5" />
+            </svg>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => void photoPicked(e.target.files?.[0])}
+          />
           <label htmlFor="chat-message" className="sr-only">
             Message Claude
           </label>
@@ -250,7 +391,7 @@ export function Chat() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={MAX_MESSAGE}
-            placeholder="Ask about your tasks…"
+            placeholder={attached ? "Add a note (optional)…" : "Ask about your tasks…"}
             autoComplete="off"
             enterKeyHint="send"
             className={input}
@@ -271,7 +412,7 @@ export function Chat() {
             <button
               key="send"
               type="submit"
-              disabled={!draft.trim()}
+              disabled={(!draft.trim() && !attached) || preparingPhoto}
               className="flex-none rounded-[10px] bg-accent px-4 font-bold text-accent-ink disabled:opacity-50"
             >
               Send

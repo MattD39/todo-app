@@ -5,6 +5,7 @@ import { ClaudeError, type ChangeReport, type ChatTurn, type TaskForClaude } fro
 import { MAX_SAVED_PER_MESSAGE } from "./chat-changes";
 import { MAX_CATEGORY, MAX_NOTES, MAX_STEPS, MAX_TITLE } from "./tasks";
 import { SIGNED_OUT_MESSAGE, type ProblemCode } from "./problems";
+import { PHOTO_ONLY_MESSAGE } from "./schedule-photo";
 import { LimitError, type ClaudeUse } from "./usage";
 
 // Shared checks for everything that sends a request to Claude from the browser
@@ -28,11 +29,13 @@ export function cleanChat(input: unknown): ChatTurn[] {
   for (const item of input.slice(-MAX_CHAT_TURNS * 2)) {
     const value = asRecord(item);
     const role = value.role === "user" || value.role === "assistant" ? value.role : null;
-    const body = role ? text(value.text, role === "user" ? MAX_CHAT_MESSAGE : MAX_CHAT_REPLY) : "";
-    const changes = role === "assistant" ? cleanReports(value.changes) : [];
-    const stopped = role === "assistant" && value.stopped === true;
     // Your message had a photo attached (the photo itself isn't sent again).
     const hadPhoto = role === "user" && value.hadPhoto === true;
+    const typed = role ? text(value.text, role === "user" ? MAX_CHAT_MESSAGE : MAX_CHAT_REPLY) : "";
+    // A photo sent with no words still counts as a message.
+    const body = typed || (hadPhoto ? PHOTO_ONLY_MESSAGE : "");
+    const changes = role === "assistant" ? cleanReports(value.changes) : [];
+    const stopped = role === "assistant" && value.stopped === true;
     // (A reply with no words still counts if it made changes or was stopped.)
     if (!role || (!body && changes.length === 0 && !stopped)) continue;
     // Two in a row from the same side (e.g. after a failed answer): keep the newer one.

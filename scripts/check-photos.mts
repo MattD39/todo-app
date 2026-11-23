@@ -41,6 +41,9 @@ const ai = await jiti.import<typeof import("../src/lib/ai.ts")>(path.join(root, 
 const sp = await jiti.import<typeof import("../src/lib/schedule-photo.ts")>(
   path.join(root, "src/lib/schedule-photo.ts"),
 );
+const { cleanChat } = await jiti.import<typeof import("../src/lib/ai-request.ts")>(
+  path.join(root, "src/lib/ai-request.ts"),
+);
 const { ClaudeMeter } = await jiti.import<typeof import("../src/lib/claude.ts")>(path.join(root, "src/lib/claude.ts"));
 
 const photosDir = path.join(root, "tests/schedule-photos");
@@ -180,6 +183,19 @@ check(
 check(
   "…but shifts can still be added after them (up to 20 in all)",
   ai.queueChange(shiftCall("2026-11-23", "Monday"), noTasks, queue, NOW.today).ok,
+);
+
+// The Chat screen sends older messages again with just "had a photo" (never
+// the photo). One sent with no words must not be dropped, or Claude's reply
+// to it would lose its question.
+const older = cleanChat([
+  { role: "user", text: "", hadPhoto: true },
+  { role: "assistant", text: "I read 5 shifts and added them." },
+  { role: "user", text: "Thanks" },
+]);
+check(
+  "an older photo-only message stays in the chat",
+  older.length === 3 && older[0].hadPhoto === true && older[0].text === sp.PHOTO_ONLY_MESSAGE,
 );
 
 // ─── Part 2: Claude reads the made-up schedules ──────────────────────────────

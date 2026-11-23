@@ -295,3 +295,23 @@ Short entries, added as each new step is finished and committed.
     the repo): a blurry one added nothing and asked me to confirm, and a cat
     photo was correctly refused. All checks passed for about 1.5 cents, and
     the normal Chat still works.
+
+- **Nov 22 — Photo to schedule, part 2 (the camera button).** Chat now has a
+  camera button next to the message box. On iPhone it offers Take Photo,
+  Photo Library or Choose File; you can add a note or send the photo alone.
+  Claude's reply lists the shifts it added, each with Undo, plus Undo all.
+  - **Privacy:** the phone shrinks the photo before sending (to about 2,000
+    pixels), which also strips hidden details like the GPS location. The
+    photo is never saved, not even in the chat history kept on the device:
+    the chat only remembers "this message had a photo".
+  - **Problem found:** a photo sent with no words was being dropped from the
+    conversation on later messages, so Claude would lose track of what it had
+    read. Cause: the server skipped empty messages. Fix: a photo-only message
+    now counts as a message, with a check to prove it.
+  - **Decisions:** Try again resends the photo while the app is open; after a
+    reload the photo is gone (by design), so the app puts your words back and
+    asks you to pick it again instead of failing quietly. Bad or unreadable
+    files are caught on the device, so they don't use up a photo message.
+  - **Testing:** a 12-step checklist on the computer passed (send, remove,
+    Stop and Try again, reload, wrong file type, Undo all, follow-up
+    questions), and the photo checks passed (39 of 39).

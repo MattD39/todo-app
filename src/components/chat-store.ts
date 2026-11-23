@@ -5,6 +5,7 @@ import { applyChatChanges, undoChatChanges } from "@/app/chat-actions";
 import type { ChangeResult, ChatChange, UndoResult } from "@/lib/chat-changes";
 import { SIGNED_OUT_MESSAGE } from "@/lib/problems";
 import { connectionProblem, isOffline, leftTodayFrom, OFFLINE_MESSAGE, problemFrom, type Problem } from "./api-problem";
+import { base64Of, type ReadyPhoto } from "./shrink-photo";
 import { onSignedIn } from "./signed-in";
 
 // The Chat tab's "engine": the conversation, the reply being written, saving
@@ -24,6 +25,11 @@ import { onSignedIn } from "./signed-in";
 //
 // The conversation is kept in sessionStorage: it survives a reload, and is
 // gone when the app is closed or you sign out. It's never saved on the server.
+//
+// Photo to schedule: a photo picked with the 📷 button goes with your next
+// message, once. Only "this message had a photo" is kept in the chat, never
+// the photo itself (not even in sessionStorage). The last photo sent stays in
+// memory only, for Try again / Edit, until the next message, Clear or a reload.
 
 const STORAGE_KEY = "chat";
 
@@ -38,6 +44,7 @@ export type ChatMessage = {
   saving?: boolean;
   results?: ShownResult[]; // how saving them went: the only thing that says ✓ done
   failed?: Problem; // your messages only: it wasn't sent, and why (Try again / Edit under it)
+  hadPhoto?: boolean; // your messages only: a photo went with it (the photo isn't kept)
 };
 
 // A saved change as shown in the chat, plus what happened when you pressed Undo.
@@ -50,7 +57,9 @@ export type ChatState = {
   savingNow: boolean; // Claude's changes are being saved: too late to stop
   undoing: boolean; // an Undo is being saved
   error: Problem | null; // shown under the chat (with a Sign in button when signed out)
-  leftToday: number | null; // chat messages left today, after the last one sent
+  leftToday: number | null; // chat (or photo) messages left today, after the last one sent
+  leftFor: "chat" | "photo"; // which limit leftToday is about
+  attached: ReadyPhoto | null; // a photo picked with 📷, waiting to go with the next message
   unseen: boolean; // a reply finished while the Chat tab wasn't showing (the dot)
   chatShowing: boolean; // the Chat screen is on screen (then the tab shows no "…" or dot)
 };
@@ -63,6 +72,8 @@ const EMPTY: ChatState = {
   undoing: false,
   error: null,
   leftToday: null,
+  leftFor: "chat",
+  attached: null,
   unseen: false,
   chatShowing: false,
 };
@@ -70,6 +81,9 @@ const EMPTY: ChatState = {
 let state: ChatState | null = null; // read from sessionStorage the first time it's needed
 const listeners = new Set<() => void>();
 let inProgress: AbortController | null = null; // the reply being written, if any
+// The photo that went with the newest message you sent (memory only), so Try
+// again / Edit can send it again. Gone after a reload.
+let lastPhoto: ReadyPhoto | null = null;
 let openViews = 0; // how many Chat screens are showing right now (0 or 1)
 
 function current(): ChatState {
@@ -118,12 +132,23 @@ export function setDraft(draft: string) {
   set({ draft });
 }
 
+// Puts a photo with the next message (null takes it away again).
+export function attachPhoto(photo: ReadyPhoto | null) {
+  set({ attached: photo });
+}
+
+// The photo for Try again / Edit of a message that had one: null if it's no
+// longer in memory (e.g. after a reload), so it has to be picked again.
+export function photoForRetry(): ReadyPhoto | null {
+  return lastPhoto;
+}
+
 // The message to offer Try again / Edit for, if the chat ends with one: a
 // message whose reply you stopped, or a message that wasn't sent.
-export function stoppedMessageOf(messages: ChatMessage[]): string | null {
+export function stoppedMessageOf(messages: ChatMessage[]): ChatMessage | null {
   const last = messages.at(-1);
-  if (last?.role === "user" && last.failed) return last.text;
-  return last?.role === "assistant" && last.stopped && messages.at(-2)?.role === "user" ? messages.at(-2)!.text : null;
+  if (last?.role === "user" && last.failed) return last;
+  return last?.role === "assistant" && last.stopped && messages.at(-2)?.role === "user" ? messages.at(-2)! : null;
 }
 
 // The chat without that message (and its stopped reply), for Try again / Edit,
@@ -138,19 +163,28 @@ function withoutRetried(messages: ChatMessage[]): ChatMessage[] {
 // changes are saved, even if you switch tabs meanwhile.
 // `replaceStopped`: the message replaces a stopped or unsent one (Try again /
 // Edit), so that one is taken out of the chat first.
-export async function sendChat(text: string, { replaceStopped = false } = {}) {
+// `photo`: the photo to send with it; by default the one picked with 📷.
+export async function sendChat(
+  text: string,
+  { replaceStopped = false, photo = current().attached }: { replaceStopped?: boolean; photo?: ReadyPhoto | null } = {},
+) {
   const message = text.trim();
   const { messages, sending, undoing } = current();
-  if (!message || sending || undoing) return;
+  // A photo can go on its own, with no words.
+  if ((!message && !photo) || sending || undoing) return;
 
+  // The photo picked with 📷 leaves the box once it's sent (or fails to send).
+  const usedAttached = photo !== null && photo === current().attached;
   const base = replaceStopped ? withoutRetried(messages) : messages;
-  const history: ChatMessage[] = [...base, { role: "user", text: message }];
+  const yours: ChatMessage = { role: "user", text: message, ...(photo ? { hadPhoto: true } : {}) };
+  const history: ChatMessage[] = [...base, yours];
+  lastPhoto = photo; // kept in memory only, for Try again / Edit
 
   // Not sent: your message stays in the chat with a note saying why, plus
   // Try again / Edit. (Not back in the box: Send sits where Stop was, so a
   // second click would send it again.)
   const markFailed = (problem: Problem) =>
-    set({ messages: [...base, { role: "user", text: message, failed: problem }], draft: "", error: null });
+    set({ messages: [...base, { ...yours, failed: problem }], draft: "", ...(usedAttached ? { attached: null } : {}), error: null });
 
   // No internet: say so straight away, without trying.
   if (isOffline()) {
@@ -162,7 +196,7 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
   inProgress = abort;
   // False once the chat was cleared (or you signed out) during this reply.
   const stillCurrent = () => inProgress === abort;
-  set({ messages: [...history, { role: "assistant", text: "" }], draft: "", error: null, sending: true });
+  set({ messages: [...history, { role: "assistant", text: "" }], draft: "", ...(usedAttached ? { attached: null } : {}), error: null, sending: true });
 
   let reply = "";
   // Stopped: keep your message and what Claude wrote so far; nothing is saved.
@@ -174,7 +208,11 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
       headers: { "Content-Type": "application/json" },
       signal: abort.signal,
       // (Messages that weren't sent never reached Claude, so they're left out.)
-      body: JSON.stringify({ messages: history.filter((m) => !m.failed).map(toTurn) }),
+      // The photo goes with this request only; older messages just say they had one.
+      body: JSON.stringify({
+        messages: history.filter((m) => !m.failed).map(toTurn),
+        ...(photo ? { photo: { data: base64Of(photo) } } : {}),
+      }),
     });
 
     if (response.redirected || !response.ok || !response.body) {
@@ -182,7 +220,8 @@ export async function sendChat(text: string, { replaceStopped = false } = {}) {
       if (stillCurrent()) markFailed(problem);
       return;
     }
-    set({ leftToday: leftTodayFrom(response) });
+    // A photo message has its own limit, so the "left today" note is about that.
+    set({ leftToday: leftTodayFrom(response), leftFor: photo ? "photo" : "chat" });
 
     // Read the reply piece by piece and show each piece as it arrives.
     const reader = response.body.getReader();
@@ -300,7 +339,8 @@ export function clearChat() {
   const stopping = inProgress;
   inProgress = null;
   stopping?.abort();
-  set({ messages: [], sending: false, savingNow: false, error: null });
+  lastPhoto = null;
+  set({ messages: [], attached: null, sending: false, savingNow: false, error: null });
   removeSaved();
 }
 
@@ -327,7 +367,7 @@ function splitReply(raw: string): { text: string; changes?: ChatChange[] } {
 // happened to their changes (saved, undone, failed) and whether you stopped
 // it, so Claude knows instead of guessing.
 function toTurn(m: ChatMessage) {
-  if (m.role === "user") return { role: m.role, text: m.text };
+  if (m.role === "user") return { role: m.role, text: m.text, ...(m.hadPhoto ? { hadPhoto: true } : {}) };
   const changes = m.results
     ? m.results.map((r) =>
         r.ok
