@@ -323,3 +323,16 @@ Short entries, added as each new step is finished and committed.
   added just that person's shifts from a team roster; the photo strip stayed
   above the keyboard; and a reply finished while on another tab (dot on the
   Chat tab). Undo all removed every test shift.
+
+- **Nov 22 — A testing switch for the photo limit (my computer only).**
+  Testing Photo to schedule used up the 10 photos a day, so I could no longer
+  test. Rather than raise the limit for everyone, the app now has a switch
+  that skips the daily photo limit, and it only works on my own computer.
+  - **Why it can't affect the live site:** the switch sits in a private
+    settings file that's never uploaded, and the code only obeys it when the
+    app runs in development mode. The live site always runs in production
+    mode, so it ignores the switch even if someone added it there by mistake.
+  - **What still applies:** 3 photos a minute, the chat limit, and the $0.15
+    daily spending cap, and every photo is still recorded.
+  - **Testing:** 8 new free checks, including "the switch is off on the live
+    site even if the setting is there".

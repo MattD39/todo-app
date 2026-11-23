@@ -51,6 +51,16 @@ export const LIMITS: Record<ClaudeFeature, Limit> = {
 // together. $0.15 a day is about $4.50 a month.
 export const DAILY_SPEND_CAP_USD = 0.15;
 
+// For testing Photo to schedule on your own computer: with
+// SKIP_PHOTO_LIMIT_LOCALLY=true in .env.local, the 10-photos-a-day limit isn't
+// checked. Only ever under "npm run dev" (NODE_ENV "development"): the live
+// site runs in production mode, so it can't turn this on even if the setting
+// were added there by mistake. The 3-a-minute limit, the chat limit and the
+// daily spending cap still apply, and every photo is still recorded.
+export function photoLimitSkippedLocally(env: Record<string, string | undefined> = process.env): boolean {
+  return env.NODE_ENV === "development" && env.SKIP_PHOTO_LIMIT_LOCALLY === "true";
+}
+
 // A limit was reached. The message is safe to show as it is.
 export class LimitError extends Error {
   constructor(
@@ -105,7 +115,9 @@ export async function startClaudeUseFor(userId: string, timeZone: string, featur
     // then any other limit it also has to fit within (a photo message is a
     // chat message too). leftToday is about this feature's own limit.
     const counts = await countUses(tx, user.id, timeZone, [feature, ...(limit.alsoCounts ?? [])]);
-    checkLimits(limit, counts);
+    const skipPerDay = feature === "chat_photo" && photoLimitSkippedLocally();
+    if (skipPerDay) console.warn("SKIP_PHOTO_LIMIT_LOCALLY is on: the daily photo limit isn't checked (dev only).");
+    checkLimits(limit, counts, { skipPerDay });
     for (const other of limit.alsoWithin ?? []) {
       const otherLimit = LIMITS[other];
       checkLimits(otherLimit, await countUses(tx, user.id, timeZone, [other, ...(otherLimit.alsoCounts ?? [])]));
@@ -118,7 +130,8 @@ export async function startClaudeUseFor(userId: string, timeZone: string, featur
       INSERT INTO "ClaudeUsage" ("id", "userId", "feature")
       VALUES (gen_random_uuid(), ${user.id}::uuid, ${feature}::"ClaudeFeature")
       RETURNING "id"`;
-    return { rowId: row.id, leftToday: limit.perDay - counts.today - 1 };
+    // (No "X left today" note while the daily limit is switched off.)
+    return { rowId: row.id, leftToday: skipPerDay ? Infinity : limit.perDay - counts.today - 1 };
   });
 
   const meter = new ClaudeMeter();
@@ -191,7 +204,8 @@ type UsageCounts = {
 
 // Throws LimitError if any limit has been reached. Exported for the checks in
 // scripts/check-limits.mts.
-export function checkLimits(limit: Limit, counts: UsageCounts): void {
+// skipPerDay: leave out the per-day count (see photoLimitSkippedLocally).
+export function checkLimits(limit: Limit, counts: UsageCounts, { skipPerDay = false } = {}): void {
   if (counts.lastMinute >= limit.perMinute) {
     const seconds = Math.max(1, counts.minuteFreesIn ?? 60);
     throw new LimitError(
@@ -199,7 +213,7 @@ export function checkLimits(limit: Limit, counts: UsageCounts): void {
       seconds,
     );
   }
-  if (counts.today >= limit.perDay) {
+  if (!skipPerDay && counts.today >= limit.perDay) {
     throw new LimitError(`You've used today's ${limit.perDay} ${limit.name}. More at midnight.`, counts.dayEndsIn);
   }
   if (limit.costsMoney && counts.spentToday >= DAILY_SPEND_CAP_USD) {

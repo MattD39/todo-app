@@ -74,6 +74,46 @@ check(
   describe(spend),
 );
 
+// The localhost switch for testing photos (SKIP_PHOTO_LIMIT_LOCALLY). It must
+// only ever work under "npm run dev", never on the live site.
+const { photoLimitSkippedLocally } = usage;
+check(
+  "photo switch: on under npm run dev with the setting",
+  photoLimitSkippedLocally({ NODE_ENV: "development", SKIP_PHOTO_LIMIT_LOCALLY: "true" }),
+);
+check(
+  "photo switch: OFF on the live site even if the setting is there",
+  !photoLimitSkippedLocally({ NODE_ENV: "production", SKIP_PHOTO_LIMIT_LOCALLY: "true" }),
+);
+check(
+  "photo switch: off without the setting, or with anything but \"true\"",
+  !photoLimitSkippedLocally({ NODE_ENV: "development" }) &&
+    !photoLimitSkippedLocally({ NODE_ENV: "development", SKIP_PHOTO_LIMIT_LOCALLY: "1" }) &&
+    !photoLimitSkippedLocally({ NODE_ENV: "test", SKIP_PHOTO_LIMIT_LOCALLY: "true" }),
+);
+check("photo switch: off when nothing says what mode it is", !photoLimitSkippedLocally({ SKIP_PHOTO_LIMIT_LOCALLY: "true" }));
+const photo = LIMITS.chat_photo;
+check(
+  "with the switch: 10 photos already today is allowed",
+  (await thrown(() => checkLimits(photo, { ...quiet, today: photo.perDay }, { skipPerDay: true }))) === null,
+);
+check(
+  "with the switch: 3 a minute still refused",
+  (await thrown(() =>
+    checkLimits(photo, { ...quiet, today: photo.perDay, lastMinute: photo.perMinute, minuteFreesIn: 20 }, { skipPerDay: true }),
+  )) instanceof LimitError,
+);
+check(
+  "with the switch: the daily spending cap still refused",
+  (await thrown(() =>
+    checkLimits(photo, { ...quiet, today: photo.perDay, spentToday: DAILY_SPEND_CAP_USD }, { skipPerDay: true }),
+  )) instanceof LimitError,
+);
+check(
+  "without the switch: 10 photos today is refused as before",
+  (await thrown(() => checkLimits(photo, { ...quiet, today: photo.perDay }))) instanceof LimitError,
+);
+
 const meter = new ClaudeMeter();
 meter.add({ input_tokens: 1000, output_tokens: 500 } as never);
 const expectedCost = (1000 * 0.1 + 500 * 0.5) / 1_000_000;
