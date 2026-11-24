@@ -552,3 +552,20 @@ Short entries, added as each new step is finished and committed.
     Deleting an entry, by swipe or in edit mode, removes only that entry.
   - **Testing:** 4 new free checks (35 in all, passed 3 times) and 16 tests in
     the app, including deleting one entry from Done in edit mode.
+
+- **Nov 24 — Deleted ticks in Recently deleted; a message on faded ticks.**
+  - **Faded tick box:** only a repeating task's newest tick can be un-ticked;
+    older ones show a faded tick. On a computer a hover hint explained why,
+    but an iPhone has no hover, so a tap did nothing. Now a tap shows "Only
+    the most recent tick can be undone." (on Done and the Calendar).
+  - **Deleted ticks are kept:** deleting one tick of a repeating task (swipe
+    or edit mode) now keeps a copy in Recently deleted for 30 days, listed as
+    "Brush teeth · ticked Mon, Nov 24". Before, only the 6-second Undo could
+    bring it back.
+  - **My decisions:** Restore never changes the task's date (deleting a tick
+    never did), and the newest tick stays the only one that can be un-ticked.
+    If the tick's task is in Recently deleted too, Restore says "Restore Brush
+    teeth first" and offers Restore both; if the task was deleted forever, it
+    says the tick can't come back. Restore all brings tasks back first.
+  - **Testing:** 16 new free checks (51 in all, passed 3 times), the database
+    privacy tests and the MCP check, and 16 tests in the app.

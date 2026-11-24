@@ -16,6 +16,7 @@ import {
   listRecentlyDeleted,
   restoreAllFromBin,
   restoreBatch,
+  restoreEntryAndTask,
   restoreFromBin,
   restoreDeletedTask,
   restoreDeletedTick,
@@ -27,6 +28,7 @@ import {
   type BatchDeleteResult,
   type BatchRestoreResult,
   type BinItem,
+  type RestoreResult,
   type DeletedTask,
   type DeletedTick,
   type NewTaskInput,
@@ -185,9 +187,18 @@ export async function getRecentlyDeleted(): Promise<{ error: string | null; item
   }
 }
 
-export async function restoreTask(id: unknown): Promise<ActionResult & { value?: string }> {
+// Restore one item: a task, or one entry of a repeating task. For an entry
+// whose task is also in Recently deleted, value says so (needsTask) and
+// nothing changes, so the screen can offer "Restore both".
+export async function restoreTask(id: unknown): Promise<ActionResult & { value?: RestoreResult }> {
   if (typeof id !== "string") return { error: "Something went wrong." };
   return run("restore", () => restoreFromBin(id));
+}
+
+// "Restore both": an entry and its task, together.
+export async function restoreEntryWithTask(id: unknown): Promise<ActionResult & { value?: string }> {
+  if (typeof id !== "string") return { error: "Something went wrong." };
+  return run("restore", () => restoreEntryAndTask(id));
 }
 
 export async function restoreAll(): Promise<ActionResult & { value?: { restored: number; failed: number } }> {

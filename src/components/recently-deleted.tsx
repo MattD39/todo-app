@@ -1,14 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition, type RefObject } from "react";
-import { deleteForever, emptyRecentlyDeleted, getRecentlyDeleted, restoreAll, restoreTask } from "@/app/task-actions";
+import {
+  deleteForever,
+  emptyRecentlyDeleted,
+  getRecentlyDeleted,
+  restoreAll,
+  restoreEntryWithTask,
+  restoreTask,
+} from "@/app/task-actions";
+import { formatDay } from "@/lib/dates";
 import type { BinItem } from "@/lib/tasks";
 
 // What the Settings sheet needs to show an "are you sure?" box for us. The
 // box itself is drawn by the sheet, outside its <dialog> (see settings-menu).
 export type ConfirmRequest = { title: string; body: string; confirmLabel: string; onConfirm: () => void };
 
-// Settings → Recently deleted: tasks you deleted in the last 30 days. Settings
+// Settings → Recently deleted: tasks (and single entries of repeating tasks)
+// you deleted in the last 30 days. Settings
 // shows one row with how many there are; tapping it opens the full list (a
 // second screen inside the same sheet), with Restore and Delete forever on
 // each task and Restore all / Empty bin in a bar that stays at the bottom.
@@ -18,8 +27,13 @@ export type ConfirmRequest = { title: string; body: string; confirmLabel: string
 export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void) {
   const [items, setItems] = useState<BinItem[] | null>(null); // null = still loading
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The result of the last button: "… is back" or what went wrong.
-  const [note, setNote] = useState<{ text: string; isError: boolean } | null>(null);
+  // The result of the last button: "… is back" or what went wrong, sometimes
+  // with a button of its own ("Restore both").
+  const [note, setNote] = useState<{
+    text: string;
+    isError: boolean;
+    action?: { label: string; onClick: () => void };
+  } | null>(null);
   // One button at a time, so taps can't cross over.
   const [busy, startBusy] = useTransition();
   const [restoringAll, setRestoringAll] = useState(false);
@@ -51,13 +65,33 @@ export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void
     startBusy(async () => {
       setNote(null);
       const result = await restoreTask(item.id);
-      if (result.error) {
-        setNote({ text: result.error, isError: true });
+      if (result.error || !result.value) {
+        setNote({ text: result.error ?? "Couldn't restore. Try again.", isError: true });
         await load(); // e.g. it was restored or deleted on another device
+      } else if ("needsTask" in result.value) {
+        // An entry whose task is in here too: nothing changed yet.
+        const task = result.value.needsTask;
+        setNote({
+          text: `Restore “${task}” first.`,
+          isError: true,
+          action: { label: "Restore both", onClick: () => restoreBoth(item, task) },
+        });
       } else {
         remove(item.id);
-        setNote({ text: `“${result.value ?? item.title}” is back on your lists.`, isError: false });
+        const what = item.kind === "tick" ? `The tick on “${result.value.restored}”` : `“${result.value.restored}”`;
+        setNote({ text: `${what} is back.`, isError: false });
       }
+    });
+  }
+
+  // An entry and its task together (offered when the task is in here too).
+  function restoreBoth(item: BinItem, task: string) {
+    startBusy(async () => {
+      setNote(null);
+      const result = await restoreEntryWithTask(item.id);
+      if (result.error) setNote({ text: result.error, isError: true });
+      else setNote({ text: `“${result.value ?? task}” and its tick are back.`, isError: false });
+      await load(); // both left the list
     });
   }
 
@@ -72,10 +106,10 @@ export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void
       if (result.error) setNote({ text: result.error, isError: true });
       else if (failed > 0) {
         setNote({
-          text: `${tasksWord(restored)} back on your lists. ${tasksWord(failed)} couldn't be restored: try again.`,
+          text: `${itemsWord(restored)} back. ${itemsWord(failed)} couldn't be restored (see the list).`,
           isError: true,
         });
-      } else setNote({ text: `${tasksWord(restored)} back on your lists.`, isError: false });
+      } else setNote({ text: `${itemsWord(restored)} back.`, isError: false });
       await load(); // shows exactly what's still in the bin
     });
   }
@@ -83,7 +117,7 @@ export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void
   function askDeleteForever(item: BinItem) {
     askConfirm({
       title: "Delete forever?",
-      body: `“${item.title}” will be gone for good. This can't be undone.`,
+      body: `“${binLabel(item)}” will be gone for good. This can't be undone.`,
       confirmLabel: "Delete forever",
       onConfirm: () =>
         startBusy(async () => {
@@ -94,7 +128,7 @@ export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void
             await load();
           } else {
             remove(item.id);
-            setNote({ text: `“${item.title}” was deleted for good.`, isError: false });
+            setNote({ text: `“${binLabel(item)}” was deleted for good.`, isError: false });
           }
         }),
     });
@@ -104,7 +138,7 @@ export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void
     const count = items?.length ?? 0;
     askConfirm({
       title: "Empty Recently deleted?",
-      body: `${count === 1 ? "The 1 task" : `All ${count} tasks`} in Recently deleted will be gone for good. This can't be undone.`,
+      body: `${count === 1 ? "The 1 item" : `All ${count} items`} in Recently deleted will be gone for good. This can't be undone.`,
       confirmLabel: "Empty bin",
       onConfirm: () =>
         startBusy(async () => {
@@ -137,8 +171,14 @@ export function useRecentlyDeleted(askConfirm: (request: ConfirmRequest) => void
 
 export type RecentlyDeletedState = ReturnType<typeof useRecentlyDeleted>;
 
-function tasksWord(n: number): string {
-  return n === 1 ? "1 task is" : `${n} tasks are`;
+function itemsWord(n: number): string {
+  return n === 1 ? "1 item is" : `${n} items are`;
+}
+
+// How an item is named in the list: a task by its title, an entry as
+// "Brush teeth · ticked Mon, Nov 24".
+function binLabel(item: BinItem): string {
+  return item.kind === "tick" ? `${item.title} · ticked ${formatDay(item.ticked)}` : item.title;
 }
 
 // The one row in Settings. `focusOnMount`: coming back from the list, so the
@@ -166,7 +206,7 @@ export function RecentlyDeletedRow({
       className="mt-3.5 flex w-full items-center gap-2 rounded-[14px] border border-line bg-surface p-4 text-left"
     >
       <span className="flex-1 font-bold">Recently deleted</span>
-      <span className="text-muted" aria-label={count ? `${count} tasks` : undefined}>
+      <span className="text-muted" aria-label={count ? `${count} items` : undefined}>
         {count}
       </span>
       <span aria-hidden className="text-[1.2rem] leading-none text-muted">
@@ -220,12 +260,24 @@ export function RecentlyDeletedScreen({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[max(16px,env(safe-area-inset-left,0px))] pb-3"
       >
         {bin.note && (
-          <p
-            role={bin.note.isError ? "alert" : "status"}
-            className={`mb-2 text-[0.9rem] ${bin.note.isError ? "font-bold text-high" : "text-ink"}`}
-          >
-            {bin.note.text}
-          </p>
+          <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <p
+              role={bin.note.isError ? "alert" : "status"}
+              className={`text-[0.9rem] ${bin.note.isError ? "font-bold text-high" : "text-ink"}`}
+            >
+              {bin.note.text}
+            </p>
+            {bin.note.action && (
+              <button
+                type="button"
+                onClick={bin.note.action.onClick}
+                disabled={bin.busy}
+                className="rounded-xl bg-accent px-3 py-1.5 text-[0.9rem] font-bold text-accent-ink disabled:opacity-50"
+              >
+                {bin.note.action.label}
+              </button>
+            )}
+          </div>
         )}
 
         {bin.loadError ? (
@@ -235,13 +287,13 @@ export function RecentlyDeletedScreen({
         ) : items === null ? (
           <p className="text-[0.9rem] text-muted">Loading…</p>
         ) : items.length === 0 ? (
-          <p className="text-[0.9rem] text-muted">Nothing here. Tasks you delete stay here for 30 days.</p>
+          <p className="text-[0.9rem] text-muted">Nothing here. Tasks and ticks you delete stay here for 30 days.</p>
         ) : (
           <>
             <ul className="divide-y divide-line rounded-[14px] border border-line bg-surface px-4">
               {items.map((item) => (
                 <li key={item.id} className="py-3">
-                  <p className="font-medium [overflow-wrap:anywhere]">{item.title}</p>
+                  <p className="font-medium [overflow-wrap:anywhere]">{binLabel(item)}</p>
                   <p className="text-[0.82rem] text-muted">{deletedWhen(item.deletedAt)}</p>
                   <div className="mt-2 flex gap-2">
                     <button
@@ -264,7 +316,7 @@ export function RecentlyDeletedScreen({
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-[0.82rem] text-muted">Deleted tasks are kept for 30 days, then deleted for good.</p>
+            <p className="mt-2 text-[0.82rem] text-muted">Deleted tasks and ticks are kept for 30 days, then deleted for good.</p>
           </>
         )}
       </div>

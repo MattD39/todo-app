@@ -16,7 +16,9 @@
 //   - Undo (part d) brings a whole batch back, with everything in it, and
 //     copes with tasks already restored or deleted forever meanwhile;
 //   - the Done tab (part e) lists each tick of a repeating task as its own
-//     entry, newest first, and marks which one is the latest.
+//     entry, newest first, and marks which one is the latest;
+//   - deleted entries (part e2) go into Recently deleted, come back without
+//     changing the task's date, and need their task back first (Restore both).
 // Only the two made-up people's rows are created and deleted (at the start
 // and the end); your own tasks are never touched or shown. Exits with an
 // error if any check fails.
@@ -138,7 +140,13 @@ try {
     "…only that entry is gone; the task and its other entry stay",
     !(await exists("TaskCompletion", tick2)) && (await exists("Task", rep)) && (await exists("TaskCompletion", tick1)),
   );
-  check("…an entry isn't put in Recently deleted (same as swiping one)", (await binCopy(rep)) === undefined);
+  check("…the task itself isn't put in Recently deleted", (await binCopy(rep)) === undefined);
+  const tick2Copy = await binCopy(tick2);
+  check(
+    "…but the entry is (part e2), marked as an entry, with its task's name and day",
+    tick2Copy?.kind === "tick" && tick2Copy?.title === "Batch gym" && tick2Copy?.completedOn === "2026-11-23",
+    JSON.stringify(tick2Copy),
+  );
   check("…the result has the entry's copy (for Undo)", r.ticks.length === 1 && r.ticks[0].id === tick2);
 
   // 4. The task and its own entry in one batch: the entry goes with the task.
@@ -331,6 +339,114 @@ try {
   check("someone else's ticks never show", !list.some((t) => t.title === "Done their repeat"));
   const two = await asTestUser(() => tasks.listDoneTasks(2));
   check("the limit counts entries and tasks together", two.length === 2, `${two.length} shown`);
+
+  // ── Entries in Recently deleted (part e2) ──
+  console.log("\nDeleted entries in Recently deleted\n");
+  await cleanUp();
+  const dueOf = async (id: string) =>
+    (await owner.query(`SELECT to_char("dueDate", 'YYYY-MM-DD') AS d FROM "Task" WHERE id = $1`, [id])).rows[0]?.d;
+  const latestOf = async () =>
+    (await asTestUser(() => tasks.listDoneTasks(100)))
+      .filter((t) => "isLatest" in t && t.isLatest)
+      .map((t) => t.completionId);
+
+  // 16. Swipe-deleting an entry keeps it in Recently deleted, listed as an entry.
+  const walk = await addTask(TEST_USER, "Bin walk", { repeat: "daily" });
+  const t1 = await addTick(walk, "2026-11-22", "3 hours");
+  const t2 = await addTick(walk, "2026-11-23", "1 hour");
+  const dueBefore = await dueOf(walk);
+  await asTestUser(() => tasks.deleteTickWithCopy(t2));
+  const listed = (await asTestUser(() => tasks.listRecentlyDeleted())).find((i) => i.id === t2);
+  check(
+    "swipe-deleting an entry puts it in Recently deleted, as an entry with its day",
+    listed?.kind === "tick" && listed.title === "Bin walk" && "ticked" in listed && listed.ticked === "2026-11-23",
+    JSON.stringify(listed),
+  );
+  check("…the older entry is now the latest", JSON.stringify(await latestOf()) === JSON.stringify([t1]));
+
+  // 17. Restoring a NEWER entry: it's back, it's the latest again, the date doesn't change.
+  let res = await asTestUser(() => tasks.restoreFromBin(t2));
+  check(
+    "restore the newer entry: back, and out of Recently deleted",
+    "restored" in res && res.restored === "Bin walk" && (await exists("TaskCompletion", t2)) && !(await exists("RecentlyDeleted", t2)),
+    JSON.stringify(res),
+  );
+  check("…it's the latest again (the one that can be un-ticked)", JSON.stringify(await latestOf()) === JSON.stringify([t2]));
+  check("…and the task's date didn't change", (await dueOf(walk)) === dueBefore, `${dueBefore} → ${await dueOf(walk)}`);
+
+  // 18. Restoring an OLDER entry: back, but the newer one stays the latest.
+  await asTestUser(() => tasks.deleteManyWithCopies([{ completionId: t1 }]));
+  check("batch-deleting an entry also puts it in Recently deleted", (await binCopy(t1))?.kind === "tick");
+  res = await asTestUser(() => tasks.restoreFromBin(t1));
+  check(
+    "restore the older entry: back, and the newer one is still the latest",
+    "restored" in res && (await exists("TaskCompletion", t1)) && JSON.stringify(await latestOf()) === JSON.stringify([t2]),
+  );
+  check("…the date still didn't change", (await dueOf(walk)) === dueBefore);
+
+  // 19. Undo (swipe or batch) also takes the entry out of Recently deleted.
+  const swiped = await asTestUser(() => tasks.deleteTickWithCopy(t1));
+  await asTestUser(() => tasks.restoreDeletedTick(swiped));
+  check("swipe Undo on an entry: back, and out of Recently deleted", (await exists("TaskCompletion", t1)) && !(await exists("RecentlyDeleted", t1)));
+  r = await asTestUser(() => tasks.deleteManyWithCopies([{ completionId: t1 }]));
+  await asTestUser(() => tasks.restoreBatch({ taskIds: r.taskIds, ticks: r.ticks }));
+  check("batch Undo on an entry: back, and out of Recently deleted", (await exists("TaskCompletion", t1)) && !(await exists("RecentlyDeleted", t1)));
+
+  // 20. The entry's task was deleted too: "restore it first", then Restore both.
+  await asTestUser(() => tasks.deleteTickWithCopy(t2));
+  await asTestUser(() => tasks.deleteManyWithCopies([{ taskId: walk }]));
+  res = await asTestUser(() => tasks.restoreFromBin(t2));
+  check(
+    "its task is in Recently deleted too: asks to restore the task first, changes nothing",
+    "needsTask" in res && res.needsTask === "Bin walk" && !(await exists("Task", walk)) && (await exists("RecentlyDeleted", t2)),
+    JSON.stringify(res),
+  );
+  const both = await asTestUser(() => tasks.restoreEntryAndTask(t2));
+  check(
+    "Restore both: the task and the entry are back, both out of Recently deleted",
+    both === "Bin walk" &&
+      (await exists("Task", walk)) &&
+      (await exists("TaskCompletion", t2)) &&
+      (await exists("TaskCompletion", t1)) &&
+      !(await exists("RecentlyDeleted", walk)) &&
+      !(await exists("RecentlyDeleted", t2)),
+  );
+
+  // 21. Restore all: tasks first, so an entry finds its task.
+  await asTestUser(() => tasks.deleteTickWithCopy(t2));
+  await asTestUser(() => tasks.deleteManyWithCopies([{ taskId: walk }]));
+  const all = await asTestUser(() => tasks.restoreAllFromBin());
+  check(
+    "Restore all with an entry and its task: both back, none failed",
+    all.restored === 2 && all.failed === 0 && (await exists("TaskCompletion", t2)),
+    JSON.stringify(all),
+  );
+
+  // 22. Its task deleted forever: the entry can't come back, and says so.
+  await asTestUser(() => tasks.deleteTickWithCopy(t2));
+  await asTestUser(() => tasks.deleteManyWithCopies([{ taskId: walk }]));
+  await asTestUser(() => tasks.deleteFromBin(walk));
+  check(
+    "its task deleted forever: Restore says the entry can't come back",
+    (await errorOf(() => asTestUser(() => tasks.restoreFromBin(t2))))?.includes("deleted forever") === true,
+  );
+
+  // 23. Someone else's entry in Recently deleted can't be restored by you.
+  const theirWalk = await addTask(OTHER_USER, "Their walk", { repeat: "daily" });
+  const theirTick = await addTick(theirWalk, "2026-11-23");
+  await owner.query(
+    `INSERT INTO "RecentlyDeleted" (id, "userId", copy)
+     VALUES ($1::uuid, $2::uuid, jsonb_build_object('id', $3::text, 'kind', 'tick', 'title', 'Their walk',
+       'taskId', $4::text, 'completedOn', '2026-11-23'))`,
+    [theirTick, OTHER_USER, theirTick, theirWalk],
+  );
+  await owner.query(`DELETE FROM "TaskCompletion" WHERE id = $1`, [theirTick]);
+  check(
+    "someone else's entry: can't be restored, stays in their Recently deleted",
+    (await errorOf(() => asTestUser(() => tasks.restoreFromBin(theirTick)))) !== null &&
+      !(await exists("TaskCompletion", theirTick)) &&
+      (await exists("RecentlyDeleted", theirTick)),
+  );
 } finally {
   await cleanUp();
   await owner.end();

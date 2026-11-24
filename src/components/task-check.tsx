@@ -21,6 +21,8 @@ import { ConfirmDialog } from "./confirm-dialog";
 // locked: an older tick in the Calendar's history. Only a task's most recent
 // tick can be undone (undoing puts the task back to its date before that
 // tick), so older ones show as ticked but can't be tapped.
+const LOCKED_MESSAGE = "Only the most recent tick can be undone.";
+
 export function CheckButton({
   task,
   today,
@@ -42,6 +44,12 @@ export function CheckButton({
   }
 
   function toggle() {
+    // A faded (locked) box can't be un-ticked. Phones have no hover hint, so
+    // a tap says why instead of doing nothing.
+    if (locked) {
+      toast(LOCKED_MESSAGE);
+      return;
+    }
     if (early && !done) {
       setConfirming(true);
       return;
@@ -84,8 +92,10 @@ export function CheckButton({
       <button
         type="button"
         onClick={toggle}
-        disabled={locked}
-        title={locked ? "Only the most recent tick can be undone" : undefined}
+        // Not `disabled` (a disabled button ignores taps): it stays tappable
+        // so it can show the message, but tells screen readers it's unavailable.
+        aria-disabled={locked || undefined}
+        title={locked ? LOCKED_MESSAGE : undefined}
         aria-label={
           locked
             ? `"${task.title}" was ticked (only the most recent tick can be undone)`
@@ -95,7 +105,7 @@ export function CheckButton({
               ? `Mark "${task.title}" as not done`
               : `Mark "${task.title}" as done`
         }
-        className="group -m-[9px] flex-none p-[9px] disabled:opacity-45"
+        className={`group -m-[9px] flex-none p-[9px] ${locked ? "opacity-45" : ""}`}
       >
         <span className={`mt-px grid size-[26px] place-items-center rounded-full border-2 ${ring}`}>
           <svg
