@@ -235,6 +235,63 @@ check(
   ai.queueChange(mondayShift("Marcus"), noTasks, queue, NOW.today).ok && queue.length === 2,
 );
 
+// Fixing a shift's time (5c-2b): the existing task changes; nothing is added.
+const wednesday = (title: string, dueTime = "12:00") =>
+  new Map([["T1", task("t1", title, { dueDate: "2026-11-25", dueTime })]]);
+const fixCall = (start: string, end: string, label = "T1") => call("fix_shift", { task: label, start, end });
+const fixedTo = (q: ChatChange[]) => {
+  const c = q[0];
+  return q.length === 1 && c.kind === "update" ? `${c.changes.title} ${c.changes.dueTime ?? "(time unchanged)"}` : JSON.stringify(q);
+};
+queue = [];
+ai.queueChange(fixCall("12:00", "18:00"), wednesday("Work 12 PM–8 PM"), queue, NOW.today);
+check('fix: "ends at 6, not 8" renames the shift; due time stays', fixedTo(queue) === "Work 12 PM–6 PM (time unchanged)", fixedTo(queue));
+queue = [];
+ai.queueChange(fixCall("13:00", "20:00"), wednesday("Work 12 PM–8 PM"), queue, NOW.today);
+check("fix: a new start also moves the due time", fixedTo(queue) === "Work 1 PM–8 PM 13:00", fixedTo(queue));
+queue = [];
+ai.queueChange(fixCall("10:00", "17:00"), wednesday("Elena work 9 AM–5 PM", "09:00"), queue, NOW.today);
+check("fix: keeps the name in the title", fixedTo(queue) === "Elena work 10 AM–5 PM 10:00", fixedTo(queue));
+queue = [];
+ai.queueChange(fixCall("12:00", "18:00"), wednesday("work 12pm-8pm"), queue, NOW.today);
+check('fix: a hand-typed "work 12pm-8pm" gets the usual title', fixedTo(queue) === "Work 12 PM–6 PM (time unchanged)", fixedTo(queue));
+check("fix: not a shift is refused", !ai.queueChange(fixCall("12:00", "18:00"), wednesday("Buy milk"), [], NOW.today).ok);
+check(
+  "fix: the same times again is refused (nothing would change)",
+  !ai.queueChange(fixCall("12:00", "20:00"), wednesday("Work 12 PM–8 PM"), [], NOW.today).ok,
+);
+const twoOnWednesday = new Map([
+  ["T1", task("t1", "Work 12 PM–8 PM", { dueDate: "2026-11-25", dueTime: "12:00" })],
+  ["T2", task("t2", "Work 12 PM–6 PM", { dueDate: "2026-11-25", dueTime: "12:00" })],
+]);
+check(
+  "fix: refused if it would become a copy of another shift that day",
+  !ai.queueChange(fixCall("12:00", "18:00"), twoOnWednesday, [], NOW.today).ok,
+);
+check(
+  "update_task can't change a shift's time (fix_shift must)",
+  !ai.queueChange(call("update_task", { task: "T1", due_time: "13:00" }), wednesday("Work 12 PM–8 PM"), [], NOW.today).ok,
+);
+check(
+  "update_task can still move a shift to another day",
+  ai.queueChange(call("update_task", { task: "T1", due_date: "2026-11-26" }), wednesday("Work 12 PM–8 PM"), [], NOW.today).ok,
+);
+
+// The safety net for "I'll add it" with no tool used: plain promises count,
+// offers for later never do (making those would be guessing).
+const promiseCases: [string, boolean][] = [
+  ["I'll add the Monday shift for Matt, 9 AM–5 PM on Mon, Dec 7.", true],
+  ["I'll add Sunday, Nov 29, 11 AM–7 PM.\n\nYour Thursday shift isn't on your list, so tell me if you want it.", true],
+  ["I’ll change Wednesday's shift to 12 PM–6 PM.", true],
+  ["If you tell me its start and end times, I'll add it too.", false],
+  ["Tell me which week and I'll add the shifts.", false],
+  ["Do you want me to add it? I'll add it once you say so.", false],
+  ["All five shifts are already on your list, so I didn't add anything.", false],
+];
+for (const [text, counts] of promiseCases) {
+  check(`safety net ${counts ? "catches" : "ignores"}: ${JSON.stringify(text.split("\n")[0])}`, (ai.unkeptPromise(text) !== null) === counts);
+}
+
 queue = [];
 let allOk = true;
 for (let i = 0; i < 20; i++) {
@@ -248,7 +305,11 @@ for (let i = 0; i < 20; i++) {
   ).ok;
 }
 check("20 shifts fit in one message", allOk && queue.length === 20);
-check("a 21st shift is refused", !ai.queueChange(shiftCall("2026-12-20", "Sunday"), noTasks, queue, NOW.today).ok);
+check(
+  "a 21st shift is refused, and ALL that reply's shifts are dropped (more than 20 adds none)",
+  !ai.queueChange(shiftCall("2026-12-20", "Sunday"), noTasks, queue, NOW.today).ok && queue.length === 0,
+  `${queue.length} still queued`,
+);
 queue = [];
 for (let i = 0; i < 10; i++) ai.queueChange(call("add_task", { title: `Task ${i}` }), noTasks, queue, NOW.today);
 check(
@@ -440,6 +501,44 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
   r = await ask(afterPhoto1("Sunday I'm actually working 11am to 7pm."), null, listAfter1);
   check("adds Sunday at the time given", same(r.queue, ["2026-11-29 11:00 Work 11 AM–7 PM"]), JSON.stringify(shiftsOf(r.queue)));
 
+  // 1h (5c-2b). Fixing a wrong time after all 5 shifts from photo 1 were saved.
+  const fiveSaved = saved([
+    ["2026-11-23", "09:00", "17:00"],
+    ["2026-11-25", "12:00", "20:00"],
+    ["2026-11-26", "07:00", "15:00"],
+    ["2026-11-27", "09:00", "17:00"],
+    ["2026-11-28", "10:00", "18:30"],
+  ]);
+  const listAll5 = [task("m1", "Buy milk"), ...fiveSaved.tasks];
+  const fixAfterPhoto1 = (followUp: string): ChatTurn[] => [
+    user("Add these shifts please.", true),
+    { role: "assistant", text: readList, changes: fiveSaved.reports },
+    user(followUp),
+  ];
+  // "s1 Work 12 PM–6 PM (time unchanged)": which task, its new title and due time.
+  const fixes = (q: ChatChange[]) =>
+    q.map((c) =>
+      c.kind === "update" ? `${c.taskId} ${c.changes.title} ${c.changes.dueTime ?? "(time unchanged)"}` : `NOT a fix: ${c.summary}`,
+    );
+  console.log('\n1h. Follow-up: "Wednesday ends at 6, not 8."');
+  r = await ask(fixAfterPhoto1("Wednesday ends at 6, not 8."), null, listAll5);
+  check(
+    "changes Wednesday's shift to 12 PM–6 PM, adds nothing",
+    JSON.stringify(fixes(r.queue)) === JSON.stringify(["s1 Work 12 PM–6 PM (time unchanged)"]),
+    JSON.stringify(fixes(r.queue)),
+  );
+  console.log('\n1i. Follow-up: "Friday starts at 10."');
+  r = await ask(fixAfterPhoto1("Friday starts at 10."), null, listAll5);
+  check(
+    "changes Friday's shift to 10 AM–5 PM and its due time to 10:00",
+    JSON.stringify(fixes(r.queue)) === JSON.stringify(["s3 Work 10 AM–5 PM 10:00"]),
+    JSON.stringify(fixes(r.queue)),
+  );
+  console.log('\n1j. Follow-up: "Tuesday ends at 4." (there\'s no Tuesday shift)');
+  r = await ask(fixAfterPhoto1("Tuesday ends at 4."), null, listAll5);
+  check("changes nothing and adds nothing", r.queue.length === 0, JSON.stringify(fixes(r.queue)));
+  check("asks about it", /\?|tell me|let me know/i.test(r.reply), r.reply);
+
   // 6 (5c-2a). Thursday hidden by a stain: add the rest now, ask about Thursday.
   photo = await scenario("6. One person's week, Thursday hidden by a coffee stain", "6-coffee-stain.png");
   r = await ask([user("Add these shifts please.")], photo);
@@ -450,7 +549,7 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     "2026-12-06 09:00 Work 9 AM–1 PM",
   ];
   check("adds the 4 clear shifts straight away", same(r.queue, riley), JSON.stringify(shiftsOf(r.queue)));
-  check("asks about Thursday", /thu/i.test(r.reply) && r.reply.includes("?"));
+  check("asks about Thursday", /thu/i.test(r.reply) && /\?|tell me/i.test(r.reply), r.reply);
   console.log('\n6b. Follow-up (no photo): "Thursday is 10 to 6."');
   const rileySaved = saved([
     ["2026-11-30", "08:00", "16:00"],

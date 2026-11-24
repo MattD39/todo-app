@@ -16,6 +16,7 @@ import { addDays, dayOf, formatDay, formatTime, isOverdue, isValidDay, relDay, t
 import {
   describeCalendar,
   sameShift,
+  shiftName,
   shiftPerson,
   shiftTitle,
   weekdayOf,
@@ -160,7 +161,8 @@ const SCHEDULE_PHOTO_RULES =
   "2. Whose shifts: a photo with only one person's shifts (one name printed on it, or none) is the user's own " +
   "schedule: don't ask whose it is, and leave person null. Names on tasks already on their list never make " +
   "that unclear. If the photo shows more than one person and the user hasn't said whose shifts to add, " +
-  "list the names you see, ask whose, and add nothing yet. Fill in person only when the user named " +
+  "still list every person's shifts (one line each, starting with the name: you won't see the photo again " +
+  "when they answer), ask whose, and add nothing yet. Fill in person only when the user named " +
   "whose shifts they are (it goes in the task's title).\n" +
   "3. Which dates: use the CALENDAR in the message for every date. If the photo shows dates, use them (no " +
   "year shown: the year that puts them nearest today). If it shows only weekdays, use the week the user " +
@@ -189,6 +191,14 @@ const SCHEDULE_PHOTO_RULES =
   "your list, or you read it as a day off or couldn't read it, and they didn't give a time: don't guess; " +
   "say what you read and ask for the time (or for the photo again). The app's notes and the task list show " +
   "what was really added: trust them over your earlier words.\n" +
+  "9. Fixing a shift: when the user says a shift's time is wrong (\"Wednesday ends at 6, not 8\", \"Friday " +
+  'starts at 10"), change the shift task already on their list with fix_shift: never add a second shift, ' +
+  "and never use update_task for a shift's times. Send the corrected time and the time that stays (from the " +
+  "task's title). Work out AM/PM from the shift (a shift ending \"at 6\" after a 12 PM start ends at 6 PM). " +
+  "If it's unclear which shift they mean (like two shifts that day), ask. If that shift isn't an open task " +
+  "(never added, undone, or already ticked off), say so and ask whether to add it with the new time; don't " +
+  "add it yet. (A day you read as off or couldn't read, with the user now giving its start and end, is rule " +
+  "8: add it.) From then on, the corrected time beats your list of what you read.\n" +
   "add_shift may only add shifts that are in a schedule photo (or your list of one); for anything else, use " +
   "the other tools as usual.\n\n";
 
@@ -214,7 +224,8 @@ const CHAT_PROMPT =
   "WHEN TO CHANGE TASKS. Only use the tools when the user's newest message clearly asks for a change " +
   '(like "add milk for Friday" or "tick off the gym"), or is a clear yes ("yes", "yes please", "go ahead", ' +
   '"do it") to one specific change you asked about in your previous message (pointing at a shift you missed ' +
-  "from a schedule photo counts too: see rule 8 under SCHEDULE PHOTOS). A vague, unclear or one-word " +
+  "from a schedule photo, or correcting a shift's time, counts too: see rules 8 and 9 under SCHEDULE " +
+  "PHOTOS). A vague, unclear or one-word " +
   'reply ("can", "ok?", "hmm", "maybe", "sure?", a typo) is NOT a yes: change nothing and briefly ask what ' +
   "they'd like. When in doubt, ask; never guess a change.\n\n" +
   "How changes happen: the tools only queue a change, and nothing is saved while you're writing. When " +
@@ -345,6 +356,27 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    // Fixing a shift's time (5c-2b). Like add_shift, Claude only gives the
+    // times; the app rewrites the title the same way (keeping any name) and
+    // moves the due time to the new start, so title and time never disagree.
+    name: "fix_shift",
+    description:
+      'Queue fixing the start and/or end time of one open shift task (titled like "Work 12 PM–8 PM") when the ' +
+      "user says its time is wrong. The app rewrites the title itself, keeps any name in it, and moves the due " +
+      "time to the new start. Send both times: the corrected one and the one that stays the same.",
+    strict: true,
+    input_schema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "The shift task's label from the newest snapshot, like T3." },
+        start: { type: "string", description: 'Start time as 24-hour "HH:MM" (9 AM = "09:00").' },
+        end: { type: "string", description: 'End time as 24-hour "HH:MM" (6 PM = "18:00").' },
+      },
+      required: ["task", "start", "end"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "complete_task",
     description:
       "Queue ticking off one open task. A repeating task isn't finished for good: it moves on to its next date.",
@@ -417,6 +449,9 @@ export async function* chatAboutTasks(
   // takes more writing, than an everyday question.
   const settings = photo ? { effort: "medium" as const, maxTokens: PHOTO_MAX_TOKENS } : undefined;
   let wroteSomething = false;
+  let written = ""; // all of Claude's text in this reply
+  let usedTools = false;
+  let overShiftCap = false; // tried to add more than 20 shifts: none are added
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const message: Anthropic.Message = yield* streamOnce(
       { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
@@ -426,6 +461,7 @@ export async function* chatAboutTasks(
       settings,
     );
     wroteSomething ||= message.content.some((b) => b.type === "text" && b.text.trim() !== "");
+    for (const b of message.content) if (b.type === "text") written += `${b.text}\n`;
 
     if (message.stop_reason === "refusal") {
       queue.length = 0; // something's off: change nothing
@@ -438,7 +474,19 @@ export async function* chatAboutTasks(
       return;
     }
     const calls = message.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-    if (message.stop_reason !== "tool_use" || calls.length === 0) break;
+    if (message.stop_reason !== "tool_use" || calls.length === 0) {
+      // Safety net: Claude sometimes writes "I'll add Sunday's shift." and
+      // forgets to use the tool, so nothing would happen. Ask it once more,
+      // out of sight: make that change now, or nothing if it wasn't asked for.
+      const promise = usedTools ? null : unkeptPromise(written);
+      if (promise) {
+        messages.push({ role: "assistant", content: message.content });
+        messages.push({ role: "user", content: keepPromiseNote(promise) });
+        await keepPromise(messages, signal, meter, settings, labels, queue, snapshot);
+      }
+      break;
+    }
+    usedTools = true;
 
     // Pass Claude's turn back unchanged (thinking included), then one message
     // with an answer for every tool call.
@@ -447,14 +495,69 @@ export async function* chatAboutTasks(
       role: "user",
       content: calls.map((call): Anthropic.ToolResultBlockParam => {
         const result = queueChange(call, labels, queue, now.today, snapshot.history.done);
+        overShiftCap ||= result.overShiftCap === true;
         return { type: "tool_result", tool_use_id: call.id, content: result.message, is_error: !result.ok };
       }),
     });
   }
 
+  // Shifts queued after going over the limit (in a later call or round) go too.
+  if (overShiftCap) dropShifts(queue);
+
   if (!wroteSomething && queue.length === 0) {
     throw new ClaudeError("Claude didn't have an answer. Try asking another way.");
   }
+}
+
+// The first sentence where Claude says it will make a change, like "I'll add
+// Sunday, Nov 29, 11 AM–7 PM.", or null. Offers for later ("If you tell me
+// the time, I'll add it.", "Want me to…?") don't count: the user hasn't
+// answered yet, so making them now would be guessing.
+// Exported for scripts/check-photos.mts.
+export function unkeptPromise(text: string): string | null {
+  const promise = /\bI(?:'ll|’ll| will)\s+(?:also\s+|now\s+)?(?:add|change|move|update|fix|tick|put|rename|set|mark)\b/i;
+  const offer = /\?|\bif\b|\bonce\b|\bwhen\b|\bafter\b|\bwant\b|tell me|let me know/i;
+  const sentences = text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim());
+  return sentences.find((s) => promise.test(s) && !offer.test(s)) ?? null;
+}
+
+function keepPromiseNote(promise: string): string {
+  return (
+    `Note from the app (not written by the user): your reply says ${JSON.stringify(promise)}, but you didn't ` +
+    "use a tool, so nothing will change. If the user's newest message really asked for that change, use the " +
+    "tool(s) for it now. If it didn't, use no tool. Don't write any text: the user won't see this step."
+  );
+}
+
+// The extra, hidden round for the safety net above: Claude's text isn't shown
+// (its reply is already written), only its tool calls are queued. No round
+// after it, so it can't start a new conversation of its own.
+async function keepPromise(
+  messages: Anthropic.MessageParam[],
+  signal: AbortSignal,
+  meter: ClaudeMeter,
+  settings: { effort: "medium"; maxTokens: number } | undefined,
+  labels: Map<string, TaskDTO>,
+  queue: ChatChange[],
+  snapshot: ChatSnapshot,
+): Promise<void> {
+  const hidden = streamOnce(
+    { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
+    signal,
+    false,
+    meter,
+    settings,
+  );
+  let step = await hidden.next();
+  while (!step.done) step = await hidden.next(); // read past the text without showing it
+  const message = step.value;
+  if (message.stop_reason !== "tool_use") return; // includes refusals and cut-off replies
+  let overShiftCap = false;
+  for (const block of message.content) {
+    if (block.type !== "tool_use") continue;
+    overShiftCap ||= queueChange(block, labels, queue, snapshot.now.today, snapshot.history.done).overShiftCap === true;
+  }
+  if (overShiftCap) dropShifts(queue);
 }
 
 // A note from the app about what happened after one of Claude's replies, so
@@ -487,7 +590,16 @@ function taskLabels(open: TaskDTO[]): Map<string, TaskDTO> {
   return new Map(open.slice(0, CHAT_MAX_OPEN).map((task, i) => [`T${i + 1}`, task]));
 }
 
-type Queued = { ok: boolean; message: string };
+// overShiftCap: this reply tried to add more shifts than one message may.
+type Queued = { ok: boolean; message: string; overShiftCap?: true };
+
+// Removes every shift from a schedule photo from the queue (other changes stay).
+function dropShifts(queue: ChatChange[]): void {
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const c = queue[i];
+    if (c.kind === "add" && c.shift) queue.splice(i, 1);
+  }
+}
 
 // Checks one tool call and, if it makes sense, adds it to the queue. The
 // answer goes back to Claude. tasks.ts checks everything again when the
@@ -506,8 +618,21 @@ export function queueChange(
   const isShift = call.name === "add_shift";
   const others = queue.filter((c) => !(c.kind === "add" && c.shift)).length;
   if (queue.length >= MAX_SAVED_PER_MESSAGE || (!isShift && others >= MAX_CHANGES_PER_MESSAGE)) {
-    const most = isShift ? `${MAX_SHIFTS_PER_MESSAGE} shifts` : `${MAX_CHANGES_PER_MESSAGE} changes`;
-    return { ok: false, message: `Not queued: one message can make at most ${most}.` };
+    if (isShift) {
+      // Rule 5: a schedule with more shifts than fit adds none, not the first
+      // 20 (Claude doesn't always count first). The caller also drops any
+      // shifts queued after this, until the reply ends.
+      dropShifts(queue);
+      return {
+        ok: false,
+        overShiftCap: true,
+        message:
+          `Not queued: that's more than ${MAX_SHIFTS_PER_MESSAGE} shifts in one message, so the app removed ALL the ` +
+          "shifts you queued in this reply and none will be added. Don't queue any more shifts. Tell the user " +
+          "none were added, and ask them to send one week at a time.",
+      };
+    }
+    return { ok: false, message: `Not queued: one message can make at most ${MAX_CHANGES_PER_MESSAGE} changes.` };
   }
   const input = (typeof call.input === "object" && call.input !== null ? call.input : {}) as Record<string, unknown>;
   const fail = (message: string): Queued => ({ ok: false, message: `Not queued: ${message}` });
@@ -546,13 +671,10 @@ export function queueChange(
       return fail(`${date} is a ${weekdayOf(date)}, not a ${String(weekday)}. Check the date in the CALENDAR.`);
     }
     if (today && date < today) return fail(`${date} has already passed; skip it and tell the user.`);
-    const time = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (typeof start !== "string" || !time.test(start) || typeof end !== "string" || !time.test(end)) {
-      return fail('start and end must be 24-hour times like "09:00" and "17:00".');
-    }
-    if (start === end) return fail("a shift can't start and end at the same time.");
+    const timesWrong = shiftTimesError(start, end);
+    if (timesWrong) return fail(timesWrong);
     const person = typeof input.person === "string" ? input.person.replace(/\s+/g, " ").trim().slice(0, 40) : "";
-    const title = shiftTitle(start, end, person || null);
+    const title = shiftTitle(start as string, end as string, person || null);
     // Already there: the same day, start and end, and the same person (or no
     // name on one of them). Two different people's shifts are both allowed.
     // Claude is told exactly which task it matched, so it can say so plainly.
@@ -583,21 +705,15 @@ export function queueChange(
     }
     const inReply = queue.some((c) => c.kind === "add" && c.shift && c.task.dueDate === date && sameShift(c.task.title, title));
     if (inReply) return fail("that shift is already queued in this reply. Don't queue it again.");
-    const shift = { title, dueDate: date, dueTime: start, category: "Work" };
+    const shift = { title, dueDate: date, dueTime: start as string, category: "Work" };
     return enqueue({ kind: "add", task: shift, summary: describeAdd(shift), shift: true });
   }
 
   const task = typeof input.task === "string" ? labels.get(input.task.trim().toUpperCase()) : undefined;
   if (!task) return fail(`there's no open task labelled ${JSON.stringify(input.task)} in the newest snapshot.`);
 
-  if (call.name === "update_task" || call.name === "clear_fields") {
-    // update_task can only set values; only clear_fields can empty them.
-    const fieldsInput = call.name === "clear_fields" ? { clear: input.fields } : { ...input, clear: undefined };
-    const changes = updateFields(fieldsInput, task);
-    if (typeof changes === "string") return fail(changes);
-    const dueDate = changes.dueDate !== undefined ? changes.dueDate : task.dueDate;
-    if (changes.dueTime && !dueDate) return fail("a due time needs a due date.");
-    // Two changes to the same task in one message become one (one ✓ line, one Undo).
+  // Two changes to the same task in one message become one (one ✓ line, one Undo).
+  const queueUpdate = (changes: TaskChanges): Queued => {
     const earlier = queue.findIndex((c) => c.kind === "update" && c.taskId === task.id);
     if (earlier !== -1) {
       const before = queue[earlier];
@@ -606,6 +722,47 @@ export function queueChange(
       return { ok: true, message: `Queued, together with your earlier change to this task: ${queue[earlier].summary}.` };
     }
     return enqueue({ kind: "update", taskId: task.id, changes, summary: describeUpdate(task, changes) });
+  };
+
+  if (call.name === "fix_shift") {
+    const name = shiftName(task.title);
+    if (name === null || !task.dueDate) {
+      return fail(`${JSON.stringify(task.title)} isn't a shift. fix_shift is only for shift tasks; use update_task.`);
+    }
+    const { start, end } = input;
+    const timesWrong = shiftTimesError(start, end);
+    if (timesWrong) return fail(timesWrong);
+    const title = shiftTitle(start as string, end as string, name || null);
+    if (sameShift(task.title, title) && task.dueTime === start) {
+      return fail("that shift already has those times, so nothing would change. Tell the user.");
+    }
+    // With its new times it mustn't become a copy of another shift that day.
+    const twin = [...labels.values()].find((t) => t.id !== task.id && t.dueDate === task.dueDate && sameShift(t.title, title));
+    if (twin) {
+      return fail(
+        `with those times it would be the same shift as the open task ${JSON.stringify(twin.title)} on that day. ` +
+          "It was NOT changed; tell the user.",
+      );
+    }
+    const changes: TaskChanges = { title };
+    if (task.dueTime !== start) changes.dueTime = start as string;
+    return queueUpdate(changes);
+  }
+
+  if (call.name === "update_task" || call.name === "clear_fields") {
+    // update_task can only set values; only clear_fields can empty them.
+    const fieldsInput = call.name === "clear_fields" ? { clear: input.fields } : { ...input, clear: undefined };
+    const changes = updateFields(fieldsInput, task);
+    if (typeof changes === "string") return fail(changes);
+    // A shift's times live in its title and its due time: fix_shift changes
+    // both together, so they can't end up saying different things.
+    const newShiftTitle = changes.title ? shiftName(changes.title) !== null : false;
+    if (call.name === "update_task" && shiftName(task.title) !== null && (newShiftTitle || changes.dueTime)) {
+      return fail("this is a shift: to change its start or end time, use fix_shift instead.");
+    }
+    const dueDate = changes.dueDate !== undefined ? changes.dueDate : task.dueDate;
+    if (changes.dueTime && !dueDate) return fail("a due time needs a due date.");
+    return queueUpdate(changes);
   }
 
   if (call.name === "complete_task") {
@@ -613,6 +770,16 @@ export function queueChange(
   }
 
   return fail(`there's no tool called ${call.name}.`);
+}
+
+// What's wrong with a shift's start and end times, or null if they're fine.
+function shiftTimesError(start: unknown, end: unknown): string | null {
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (typeof start !== "string" || !time.test(start) || typeof end !== "string" || !time.test(end)) {
+    return 'start and end must be 24-hour times like "09:00" and "17:00".';
+  }
+  if (start === end) return "a shift can't start and end at the same time.";
+  return null;
 }
 
 // The changes an update_task call asks for, as the app's field names. Only

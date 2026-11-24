@@ -85,7 +85,7 @@ export function shiftTitle(start: string, end: string, person?: string | null): 
 // A shift title taken apart: "Elena work 9 AM–5 PM" → person "elena", times
 // "9 am–5 pm". Null if the title isn't shaped like a shift. (Accepts a plain
 // "-" too, in case a task was typed by hand.)
-function shiftParts(title: string): { person: string; times: string } | null {
+function shiftParts(title: string): { person: string; name: string; times: string } | null {
   const time = String.raw`\d{1,2}(?::\d{2})?\s*[ap]m`;
   const match = new RegExp(String.raw`^(?:(.+?)\s+work|work)\s+(${time}\s*[–-]\s*${time}(?:\s*\(ends next day\))?)$`, "i").exec(
     title.replace(/\s+/g, " ").trim(),
@@ -93,6 +93,7 @@ function shiftParts(title: string): { person: string; times: string } | null {
   if (!match) return null;
   return {
     person: (match[1] ?? "").toLowerCase(),
+    name: match[1] ?? "", // as written, for rebuilding the title
     times: match[2].toLowerCase().replace(/\s+/g, "").replace("-", "–"),
   };
 }
@@ -112,6 +113,12 @@ export function sameShift(a: string, b: string): boolean {
 // → "elena", "Work 9 AM–5 PM" → "" (no name). Null if it isn't a shift title.
 export function shiftPerson(title: string): string | null {
   return shiftParts(title)?.person ?? null;
+}
+
+// The name in front of a shift title as written ("Elena work 9 AM–5 PM" →
+// "Elena"; "" for none), so a fixed shift keeps it. Null if not a shift title.
+export function shiftName(title: string): string | null {
+  return shiftParts(title)?.name ?? null;
 }
 
 function shortTime(time: string): string {

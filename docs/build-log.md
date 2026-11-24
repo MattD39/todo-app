@@ -384,3 +384,27 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** 2 new made-up schedules (one with a coffee stain hiding a
     day), 4 new free checks and 12 new live checks, including scripted
     follow-up conversations (passed 5 runs in a row), and 9 tests in the app.
+
+- **Nov 23 — Photo to schedule, part 3c: fixing a wrong time.** Telling
+  Claude "Wednesday ends at 6, not 7" now changes the shift already on the
+  list instead of adding a second one, with the usual ✓ line and Undo.
+  - **How:** Claude only says which shift and the new start and end times.
+    The app rewrites the title the same way every time, keeps any name in it
+    ("Elena work 9 AM–3 PM"), and moves the due time if the start changed. It
+    refuses a "fix" that isn't a shift, changes nothing, or would turn it into
+    a copy of another shift that day. The ordinary "change a task" tool can no
+    longer change a shift's time, so the title and the due time can't end up
+    saying different things.
+  - **Problems found by the checks, fixed in this step:** (1) Claude now and
+    then wrote "I'll add it" without actually adding anything. Fix: if a reply
+    makes a plain promise like that but changed nothing, the app quietly asks
+    Claude once more to make that change (or nothing, if it wasn't asked for).
+    Offers like "If you tell me the time, I'll add it" don't count, so it
+    never guesses. (2) Once, Claude queued 20 of a photo's 22 shifts when the
+    rule is "more than 20 adds none". Fix: the app enforces it now, dropping
+    every shift from that reply. (3) On a photo with several people, Claude
+    once listed only the names, so it couldn't add "Elena's shifts" later.
+    Fix: it must list everyone's shifts.
+  - **Testing:** 17 new free checks and 3 new live checks (89 checks, passed
+    3 runs in a row), and 8 tests in the app, including Undo and keeping a
+    name.
