@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { formatDay, nowIn } from "@/lib/dates";
 import { listCategories, listOpenTasks } from "@/lib/tasks";
 import { getTimeZone } from "@/lib/timezone";
-import { buildStats } from "@/lib/views";
+import { buildStats, defaultCategory, pickedCategories, setCategoryParams } from "@/lib/views";
 import { TimeZoneSync } from "@/app/timezone-sync";
 import { TaskEditorProvider } from "./task-editor";
 import { CategoryChips } from "./category-chips";
@@ -63,15 +63,16 @@ const TITLES: Record<Tab, string> = {
 
 export type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-// Loads what every screen needs. The category filter comes from the address
-// bar (?cat=Fitness) so it survives a refresh and carries across tabs.
+// Loads what every screen needs. The category chips that are on come from the
+// address bar (?cat=Work&cat=Fitness) so they survive a refresh and carry
+// across tabs. None on = "All".
 export async function loadScreen(searchParams: SearchParams) {
   const [user, timeZone, params] = await Promise.all([getCurrentUser(), getTimeZone(), searchParams]);
-  const [open, categories] = await Promise.all([listOpenTasks(), listCategories()]);
-  const requested = typeof params.cat === "string" ? params.cat : null;
-  // An unknown category (e.g. its last task was deleted) just shows everything.
-  const category = categories.some((c) => c.name === requested) ? requested : null;
-  return { user, timeZone, now: nowIn(timeZone), open, categories: categories.map((c) => c.name), category };
+  const [open, categoryRows] = await Promise.all([listOpenTasks(), listCategories()]);
+  const categories = categoryRows.map((c) => c.name);
+  // Unknown names (e.g. a category whose last task was deleted) are left out.
+  const picked = pickedCategories(params.cat, categories);
+  return { user, timeZone, now: nowIn(timeZone), open, categories, picked };
 }
 
 export type ScreenData = Awaited<ReturnType<typeof loadScreen>>;
@@ -87,11 +88,11 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
 
 function ScreenFrame({ tab, data, children }: { tab: Tab; data: ScreenData; children: React.ReactNode }) {
   const stats = buildStats(data.open, data.now);
-  const chips = <CategoryChips categories={data.categories} selected={data.category} />;
+  const chips = <CategoryChips categories={data.categories} picked={data.picked} />;
   return (
     <TaskEditorProvider
       categories={data.categories}
-      defaultCategory={data.category}
+      defaultCategory={defaultCategory(data.picked)}
       today={data.now.today}
       showAddButton={tab !== "chat"} // it would sit on top of the chat's Send button
       enterToAdd={tab === "today" || tab === "upcoming" || tab === "calendar"}
@@ -129,7 +130,7 @@ function ScreenFrame({ tab, data, children }: { tab: Tab; data: ScreenData; chil
 
       {children}
 
-      <TabBar current={tab} category={data.category} />
+      <TabBar current={tab} picked={data.picked} />
       {/* Covers the tab bar while selecting tasks (edit mode only). */}
       <SelectionBar />
     </TaskEditorProvider>
@@ -141,7 +142,7 @@ export function ScreenLoading({ tab }: { tab: Tab }) {
   return (
     <>
       <ScreenHeader tab={tab} />
-      <TabBar current={tab} category={null} />
+      <TabBar current={tab} picked={[]} />
     </>
   );
 }
@@ -176,12 +177,13 @@ function ScreenHeader({
   );
 }
 
-function hrefFor(tab: Tab, category: string | null) {
+function hrefFor(tab: Tab, picked: string[]) {
   const path = TABS.find((t) => t.tab === tab)!.path;
-  return category ? `${path}?cat=${encodeURIComponent(category)}` : path;
+  const query = setCategoryParams(new URLSearchParams(), picked).toString();
+  return query ? `${path}?${query}` : path;
 }
 
-function TabBar({ current, category }: { current: Tab; category: string | null }) {
+function TabBar({ current, picked }: { current: Tab; picked: string[] }) {
   return (
     <nav
       aria-label="Screens"
@@ -190,7 +192,7 @@ function TabBar({ current, category }: { current: Tab; category: string | null }
       {TABS.map(({ tab, label, icon }) => (
         <Link
           key={tab}
-          href={hrefFor(tab, category)}
+          href={hrefFor(tab, picked)}
           aria-current={tab === current ? "page" : undefined}
           className={`flex h-16 flex-col items-center justify-center gap-[3px] text-[0.74rem] ${
             tab === current ? "font-bold text-accent" : "text-muted"

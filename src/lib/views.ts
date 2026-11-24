@@ -51,9 +51,44 @@ export function buildStats(open: TaskDTO[], now: Now): Stats {
   };
 }
 
-// Only the tasks in one category, or all of them when category is null.
-export function inCategory<T extends TaskDTO>(tasks: T[], category: string | null): T[] {
-  return category ? tasks.filter((t) => t.category?.name === category) : tasks;
+// ─── Category chips (several can be on at once) ─────────────────────────────
+
+// The chips that are on, from the address bar (?cat=Work&cat=Fitness): only
+// categories that exist, each once, in the chips' own order. Empty = "All".
+export function pickedCategories(param: string | string[] | undefined, known: string[]): string[] {
+  const asked = new Set(typeof param === "string" ? [param] : (param ?? []));
+  return known.filter((name) => asked.has(name));
+}
+
+// What tapping a chip does: a category chip turns on or off (turning the last
+// one off leaves none, which is "All"); "All" (null) turns every other off.
+export function toggleCategory(picked: string[], name: string | null, known: string[]): string[] {
+  if (name === null) return [];
+  const next = new Set(picked);
+  if (next.has(name)) next.delete(name);
+  else next.add(name);
+  return known.filter((n) => next.has(n));
+}
+
+// Only the tasks in the picked categories together, or all of them when none
+// are picked ("All").
+export function inCategories<T extends TaskDTO>(tasks: T[], picked: string[]): T[] {
+  if (picked.length === 0) return tasks;
+  const names = new Set(picked);
+  return tasks.filter((t) => t.category && names.has(t.category.name));
+}
+
+// The category a new task starts in: the chip that's on, if exactly one is.
+// With several on it starts with none, so you pick (the user's choice).
+export function defaultCategory(picked: string[]): string | null {
+  return picked.length === 1 ? picked[0] : null;
+}
+
+// The address bar's ?cat= part for the picked chips (one cat= each).
+export function setCategoryParams(params: URLSearchParams, picked: string[]): URLSearchParams {
+  params.delete("cat");
+  for (const name of picked) params.append("cat", name);
+  return params;
 }
 
 // The dots on the Calendar: how many unfinished tasks fall on each day,

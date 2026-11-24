@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { listDoneTasks } from "@/lib/tasks";
-import { inCategory } from "@/lib/views";
+import { inCategories } from "@/lib/views";
 import { TaskGroup } from "@/components/task-list";
 import { loadScreen, Screen, ScreenLoading, Status, type SearchParams } from "@/components/screen";
 
@@ -20,7 +20,7 @@ const SHOW_LAST = 100;
 
 async function Done({ searchParams }: { searchParams: SearchParams }) {
   const [data, done] = await Promise.all([loadScreen(searchParams), listDoneTasks(SHOW_LAST)]);
-  const tasks = inCategory(done, data.category);
+  const tasks = inCategories(done, data.picked);
 
   return (
     <Screen tab="done" data={data}>

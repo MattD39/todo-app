@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { relDay } from "@/lib/dates";
-import { buildUpcoming, inCategory } from "@/lib/views";
+import { buildUpcoming, inCategories } from "@/lib/views";
 import { TaskGroup } from "@/components/task-list";
 import { loadScreen, Screen, ScreenLoading, Status, type SearchParams } from "@/components/screen";
 
@@ -17,7 +17,7 @@ export default function UpcomingPage({ searchParams }: { searchParams: SearchPar
 
 async function Upcoming({ searchParams }: { searchParams: SearchParams }) {
   const data = await loadScreen(searchParams);
-  const days = buildUpcoming(inCategory(data.open, data.category), data.now);
+  const days = buildUpcoming(inCategories(data.open, data.picked), data.now);
 
   return (
     <Screen tab="upcoming" data={data}>

@@ -569,3 +569,15 @@ Short entries, added as each new step is finished and committed.
     says the tick can't come back. Restore all brings tasks back first.
   - **Testing:** 16 new free checks (51 in all, passed 3 times), the database
     privacy tests and the MCP check, and 16 tests in the app.
+
+- **Nov 24 — Several category chips at once.** Tapping a chip now turns it on
+  or off, and the list shows every "on" category's tasks together. Turning
+  the last chip off goes back to All, and tapping All turns the others off.
+  Before, a chip could only be switched by tapping All.
+  - **How:** the chips that are on live in the address bar (one `cat=` each),
+    so they survive a refresh and carry across Today, Upcoming, Calendar and
+    Done. Names with spaces, commas or "&" work.
+  - **My decision:** with several chips on, Add task starts with no category
+    so I pick one (with exactly one on, it starts in that one, as before).
+  - **Testing:** a new free check (`npm run check:categories`, 22 checks of the
+    chip rules, passed 3 times) and 15 tests in the app.

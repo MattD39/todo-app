@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { formatMonth, monthGrid, relDay, type Now } from "@/lib/dates";
 import type { HistoryDTO, TaskDTO, TickDTO } from "@/lib/tasks";
-import { dayHistory, type DayMark } from "@/lib/views";
+import { dayHistory, setCategoryParams, type DayMark } from "@/lib/views";
 import { TaskGroup } from "./task-list";
 import { Status } from "./status";
 
@@ -15,9 +15,9 @@ import { Status } from "./status";
 // address in place (no trip to the server, so it's instant). Changing month
 // is a normal page visit, because later steps load that month's history.
 
-export function calendarHref(day: string, category: string | null) {
+export function calendarHref(day: string, picked: string[]) {
   const params = new URLSearchParams({ day });
-  if (category) params.set("cat", category);
+  setCategoryParams(params, picked); // the category chips that are on
   return `/calendar?${params}`;
 }
 
@@ -29,7 +29,7 @@ export function MonthCalendar({
   history,
   now,
   timeZone,
-  category,
+  picked,
 }: {
   initialDay: string;
   open: TaskDTO[]; // unfinished tasks, already filtered by category
@@ -38,7 +38,7 @@ export function MonthCalendar({
   history: HistoryDTO; // what was finished on the days on screen, filtered by category
   now: Now;
   timeZone: string;
-  category: string | null;
+  picked: string[]; // the category chips that are on (none = All)
 }) {
   const [selected, setSelected] = useState(initialDay);
   const { today } = now;
@@ -55,14 +55,14 @@ export function MonthCalendar({
     const [y, m] = month.split("-").map(Number);
     const d = new Date(Date.UTC(y, m - 1 + offset, 1));
     const target = d.toISOString().slice(0, 7);
-    return calendarHref(today.startsWith(target) ? today : `${target}-01`, category);
+    return calendarHref(today.startsWith(target) ? today : `${target}-01`, picked);
   };
 
   const select = (day: string) => {
     setSelected(day);
     // replaceState, not pushState: tapping through ten days shouldn't take
     // ten presses of Back to leave the screen.
-    window.history.replaceState(null, "", calendarHref(day, category));
+    window.history.replaceState(null, "", calendarHref(day, picked));
   };
 
   return (
@@ -125,7 +125,7 @@ export function MonthCalendar({
                 {content}
               </button>
             ) : (
-              <Link key={day} href={calendarHref(day, category)} aria-label={label} className={className}>
+              <Link key={day} href={calendarHref(day, picked)} aria-label={label} className={className}>
                 {content}
               </Link>
             );

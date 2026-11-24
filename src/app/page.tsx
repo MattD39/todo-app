@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { listRecentlyDoneTasks } from "@/lib/tasks";
-import { buildToday, inCategory } from "@/lib/views";
+import { buildToday, inCategories } from "@/lib/views";
 import { TaskGroup } from "@/components/task-list";
 import { loadScreen, Screen, ScreenLoading, Status, type SearchParams } from "@/components/screen";
 
@@ -19,8 +19,8 @@ export default function TodayPage({ searchParams }: { searchParams: SearchParams
 
 async function Today({ searchParams }: { searchParams: SearchParams }) {
   const [data, recentlyDone] = await Promise.all([loadScreen(searchParams), listRecentlyDoneTasks()]);
-  const { now, timeZone, category } = data;
-  const view = buildToday(inCategory(data.open, category), inCategory(recentlyDone, category), now, timeZone);
+  const { now, timeZone, picked } = data;
+  const view = buildToday(inCategories(data.open, picked), inCategories(recentlyDone, picked), now, timeZone);
   const nothingDue = !view.overdue.length && !view.dueToday.length && !view.anytime.length;
   const shared = { now, timeZone, swipe: true };
 
