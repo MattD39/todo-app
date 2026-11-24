@@ -72,6 +72,59 @@ export function describeCalendar(today: string): string {
   return `CALENDAR (use it for every date; weeks start on Monday):\n${weeks.join("\n")}`;
 }
 
+// ─── Names (5c-4) ────────────────────────────────────────────────────────────
+//
+// A name goes in a shift's title only if the user typed it in their own chat
+// messages (capitals ignored), never because it's printed on the photo or
+// Claude came up with it.
+
+// Words that never count as a name, even though the user typed them.
+const NOT_NAMES = new Set([
+  ..."i me my mine myself you your yours we us our ours".split(" "),
+  ..."he him his she her hers they them their theirs".split(" "),
+  ..."shift shifts work works working add schedule the these those this that please".split(" "),
+]);
+
+// One word as a name key: small letters, without a possessive ("Elena's",
+// "James'" → "elena", "james").
+function nameKey(word: string): string {
+  return word
+    .toLowerCase()
+    .replace(/[’']s$/, "")
+    .replace(/[’']$/, "");
+}
+
+// The words the user typed, by key → the word as they wrote it (without a
+// possessive). If they wrote a word several ways, a way with capitals wins
+// (the latest one), so "Elena" beats "elena".
+export function typedWords(userTexts: string[]): Map<string, string> {
+  const words = new Map<string, string>();
+  for (const text of userTexts) {
+    for (const [raw] of text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}’'-]*/gu)) {
+      const key = nameKey(raw);
+      if (!key || NOT_NAMES.has(key)) continue;
+      const written = raw.replace(/[’']s$/, "").replace(/[’']$/, "");
+      const before = words.get(key);
+      if (!before || written !== written.toLowerCase() || before === before.toLowerCase()) words.set(key, written);
+    }
+  }
+  return words;
+}
+
+// The name to put on a shift, from the one Claude sent: only the words the
+// user typed, written the way they typed them, or with a capital first letter
+// if they typed it all in small letters ("elena" → "Elena"). "" if Claude sent
+// none. null if Claude sent a name but none of its words are the user's.
+export function typedName(sent: string, typed: Map<string, string>): string | null {
+  const words = sent.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  if (words.length === 0) return "";
+  const kept = words
+    .map((w) => typed.get(nameKey(w)))
+    .filter((w): w is string => w !== undefined)
+    .map((w) => (w === w.toLowerCase() ? w.charAt(0).toUpperCase() + w.slice(1) : w));
+  return kept.length > 0 ? kept.join(" ").slice(0, 40) : null;
+}
+
 // ─── Shift titles ────────────────────────────────────────────────────────────
 
 // "Work 9 AM–5 PM", "Work 9:30 AM–5 PM", "Jess work 10 PM–6 AM (ends next day)".
@@ -99,14 +152,15 @@ function shiftParts(title: string): { person: string; name: string; times: strin
 }
 
 // Whether two shift titles on the same day are the same shift: same start and
-// end time, and the same person, or one of them has no name ("Work 9 AM–5 PM"
-// is the same shift as "Elena work 9 AM–5 PM"). Different names are different
-// people's shifts, so both are allowed.
+// end time, and the same person: the same name (capitals ignored), or no name
+// on either. A shift with no name is the user's own, so "Work 9 AM–5 PM" and
+// "Elena work 9 AM–5 PM" are different people's shifts and both are allowed
+// (the user's decision, 5c-4; the overlap rule counts people the same way).
 export function sameShift(a: string, b: string): boolean {
   const x = shiftParts(a);
   const y = shiftParts(b);
   if (!x || !y || x.times !== y.times) return false;
-  return x.person === y.person || x.person === "" || y.person === "";
+  return x.person === y.person;
 }
 
 // When a shift title says it starts and ends, in minutes from midnight of its

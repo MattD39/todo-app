@@ -167,33 +167,31 @@ const onMonday = (title: string) =>
 const mondayShift = (person: string | null, start = "09:00", end = "17:00") =>
   shiftCall("2026-11-23", "Monday", start, end, person);
 const refusedAsOnList = (r: { ok: boolean; message: string }) => !r.ok && /already on the user/.test(r.message);
+// 5c-4 (user's decision): no name = the user's own shift, so an unnamed shift
+// and a named one are different people's, both ways round.
 check(
-  "duplicate: no name on the list, new one with a name, is refused",
-  refusedAsOnList(ai.queueChange(mondayShift("Elena"), onMonday("Work 9 AM–5 PM"), [], NOW.today)),
-);
-// 5c-2a: a name on the list and none on the new one may be someone else's
-// shift, so it isn't added and Claude is told to ask about it.
-const clash = ai.queueChange(mondayShift(null), onMonday("Elena work 9 AM–5 PM"), [], NOW.today);
-check(
-  "clash: a name on the list, new one with no name, is NOT added, and Claude is told to ask",
-  !clash.ok && /NOT added/.test(clash.message) && /ask whether it's the same shift/.test(clash.message),
-  clash.message,
+  "different people: the user's own unnamed 9–5 on the list, Elena's 9–5 is added",
+  ai.queueChange(mondayShift("Elena"), onMonday("Work 9 AM–5 PM"), [], NOW.today).ok,
 );
 check(
-  "clash: once the user gives their name (Matt), it's added as a separate shift",
-  ai.queueChange(mondayShift("Matt"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today).ok,
+  "different people: Elena's 9–5 on the list, the user's own unnamed 9–5 is added (no question)",
+  ai.queueChange(mondayShift(null), onMonday("Elena work 9 AM–5 PM"), [], NOW.today).ok,
 );
 const elenaAndMine = new Map([
   ["T1", task("t1", "Elena work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" })],
   ["T2", task("t2", "Work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" })],
 ]);
 check(
-  "no clash question when a plain match is there too (Elena's and the user's own)",
+  "same person: the user's own 9–5 already there (next to Elena's) is refused as already on the list",
   refusedAsOnList(ai.queueChange(mondayShift(null), elenaAndMine, [], NOW.today)),
 );
 check(
-  "no clash question when the names match: just \"already on the list\"",
+  "same person: Elena's 9–5 already there is refused as already on the list",
   refusedAsOnList(ai.queueChange(mondayShift("Elena"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today)),
+);
+check(
+  "different people, overlapping times: the user's own 9–5 on the list, Elena's 10–6 is added",
+  ai.queueChange(mondayShift("Elena", "10:00", "18:00"), onMonday("Work 9 AM–5 PM"), [], NOW.today).ok,
 );
 check(
   "duplicate: the same name in different capitals is refused",
@@ -227,12 +225,16 @@ check(
 queue = [];
 ai.queueChange(mondayShift("Elena"), noTasks, queue, NOW.today);
 check(
-  "in one reply: Elena's shift, then the same with no name, is refused",
-  !ai.queueChange(mondayShift(null), noTasks, queue, NOW.today).ok && queue.length === 1,
+  "in one reply: Elena's shift, then the user's own at the same time, are both queued",
+  ai.queueChange(mondayShift(null), noTasks, queue, NOW.today).ok && queue.length === 2,
 );
 check(
-  "in one reply: Elena's shift, then Marcus's at the same time, are both queued",
-  ai.queueChange(mondayShift("Marcus"), noTasks, queue, NOW.today).ok && queue.length === 2,
+  "in one reply: then Marcus's at the same time is queued too",
+  ai.queueChange(mondayShift("Marcus"), noTasks, queue, NOW.today).ok && queue.length === 3,
+);
+check(
+  "in one reply: the user's own again is refused",
+  !ai.queueChange(mondayShift(null), noTasks, queue, NOW.today).ok && queue.length === 3,
 );
 
 // Overlapping shifts (5c-3 test 6, user's decision): the same person (same
@@ -280,6 +282,48 @@ check(
 check(
   "exact same shift still says \"already on the list\" (not the overlap question)",
   refusedAsOnList(ai.queueChange(wedShift("11:00", "18:00"), onWed("Work 11 AM–6 PM"), [], NOW.today)),
+);
+
+// Names (5c-4): a name goes in a title only if the user typed it.
+const typed = (...texts: string[]) => sp.typedWords(texts);
+const nameCases: [string, string, Map<string, string>, string | null][] = [
+  // what's checked, the name Claude sent, what the user typed, the name used ("" = none, null = refused)
+  ["a typed name is used", "Elena", typed("Add Elena's shifts."), "Elena"],
+  ['"Elena\'s" counts as "Elena"', "Elena", typed("Add Elena's shifts"), "Elena"],
+  ["capitals are ignored when matching", "Elena", typed("add ELENA shifts"), "ELENA"],
+  ['all small letters get a capital first ("elena" → "Elena")', "elena", typed("add elena's shifts"), "Elena"],
+  ["capitals the user typed are kept exactly", "Mcdonald", typed("add McDonald's shifts"), "McDonald"],
+  ['a word only on the photo is dropped ("Elena Ruiz" → "Elena")', "Elena Ruiz", typed("Add Elena's shifts."), "Elena"],
+  ["a name only on the photo is refused", "Riley Chen", typed("Add these shifts please."), null],
+  ["no name stays no name", "", typed("Add these shifts please."), ""],
+  ['"me" is never a name', "Me", typed("add the shifts for me"), null],
+  ['"myself" is never a name', "Myself", typed("I'll do it myself"), null],
+  ['"we", "us", "our" are never names', "Our", typed("we work these, add them for us, our shifts"), null],
+  ['"shift", "work", "add", "schedule" are never names', "Work", typed("add the work shift from my schedule"), null],
+  ['"shifts" is never a name', "Shifts", typed("add shifts"), null],
+];
+for (const [name, sent, words, expected] of nameCases) {
+  const got = sp.typedName(sent, words);
+  check(`name: ${name}`, got === expected, JSON.stringify(got));
+}
+const typedElena = typed("Add Elena's shifts.");
+const elenaOnMonday = onMonday("Elena work 9 AM–5 PM");
+check(
+  'name first: Claude\'s "Elena Ruiz" is the same as an existing "Elena work 9 AM–5 PM" (already on the list)',
+  refusedAsOnList(ai.queueChange(mondayShift("Elena Ruiz"), elenaOnMonday, [], NOW.today, [], typedElena)),
+);
+queue = [];
+ai.queueChange(mondayShift("Elena Ruiz"), noTasks, queue, NOW.today, [], typedElena);
+check(
+  'the title uses the typed name: "Elena work 9 AM–5 PM"',
+  queue[0]?.kind === "add" && queue[0].task.title === "Elena work 9 AM–5 PM",
+  JSON.stringify(queue[0]),
+);
+const printedOnly = ai.queueChange(mondayShift("Riley Chen"), noTasks, [], NOW.today, [], typed("Add these shifts please."));
+check(
+  "a shift named only by the photo is NOT added; Claude is told to ask or use no name",
+  !printedOnly.ok && /isn't a name the user typed/.test(printedOnly.message),
+  printedOnly.message,
 );
 
 // Fixing a shift's time (5c-2b): the existing task changes; nothing is added.
@@ -522,11 +566,11 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
   );
 
   // 1c. The same photo sent again when every shift is already there (one
-  // with a name in front, one already ticked off): nothing new is added,
-  // and Claude says they were already on the list.
-  console.log("\n1c. Same photo again, all 5 shifts already there (Monday with a name, Friday ticked off)");
+  // already ticked off): nothing new is added, and Claude says they were
+  // already on the list.
+  console.log("\n1c. Same photo again, all 5 shifts already there (Friday ticked off)");
   const allThere = [
-    task("w1", "Jordan work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" }),
+    task("w1", "Work 9 AM–5 PM", { dueDate: "2026-11-23", dueTime: "09:00" }),
     task("w2", "Work 12 PM–8 PM", { dueDate: "2026-11-25", dueTime: "12:00" }),
     task("w3", "Work 7 AM–3 PM", { dueDate: "2026-11-26", dueTime: "07:00" }),
     task("w5", "Work 10 AM–6:30 PM", { dueDate: "2026-11-28", dueTime: "10:00" }),
@@ -699,36 +743,21 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     JSON.stringify(fixes(r6d.queue)),
   );
 
-  // 7 (5c-2a). The user's own one-person schedule, while someone else's shift
-  // ("Elena work 9 AM–5 PM") is on the list at Monday's time. Adds the others
-  // straight away (no "Are these your shifts?"), asks only about Monday.
+  // 7. The user's own one-person schedule, while someone else's shift
+  // ("Elena work 9 AM–5 PM") is on the list at Monday's time. Since 5c-4 an
+  // unnamed shift (the user's own) and Elena's are different people's: all 4
+  // are added straight away, with no question about Monday.
   photo = await scenario("7. One person's week, Elena's 9–5 already on the list on Monday", "7-one-person.png");
   const elenaMonday = task("e1", "Elena work 9 AM–5 PM", { dueDate: "2026-12-07", dueTime: "09:00" });
   r = await ask([user("Add these shifts please.")], photo, [task("m1", "Buy milk"), elenaMonday]);
   const casey = [
+    "2026-12-07 09:00 Work 9 AM–5 PM",
     "2026-12-09 16:00 Work 4 PM–11 PM",
     "2026-12-11 17:00 Work 5 PM–11 PM",
     "2026-12-12 12:00 Work 12 PM–8 PM",
   ];
-  check("adds the other 3 shifts straight away", same(r.queue, casey), JSON.stringify(shiftsOf(r.queue)));
-  check("asks about Monday, naming Elena's task", /elena/i.test(r.reply) && r.reply.includes("?"));
+  check("adds all 4 shifts, Monday included (Elena's is someone else's)", same(r.queue, casey), JSON.stringify(shiftsOf(r.queue)));
   check("doesn't ask whether these are your shifts", !/are (these|they) (all )?(your|yours|your own)\b/i.test(r.reply));
-  console.log('\n7b. Follow-up (no photo): "It\'s a separate shift, it\'s mine. Put my name on it: Matt."');
-  const caseySaved = saved([
-    ["2026-12-09", "16:00", "23:00"],
-    ["2026-12-11", "17:00", "23:00"],
-    ["2026-12-12", "12:00", "20:00"],
-  ]);
-  const r7 = await ask(
-    [
-      user("Add these shifts please.", true),
-      { role: "assistant", text: r.reply, changes: caseySaved.reports },
-      user("It's a separate shift, it's mine. Put my name on it: Matt."),
-    ],
-    null,
-    [task("m1", "Buy milk"), elenaMonday, ...caseySaved.tasks],
-  );
-  check("adds Monday as Matt's shift", same(r7.queue, ["2026-12-07 09:00 Matt work 9 AM–5 PM"]), JSON.stringify(shiftsOf(r7.queue)));
 
   // 2. Weekdays only: must ask which week, then use the answer.
   photo = await scenario("2. Weekdays only, no dates", "2-weekdays-only.png");
@@ -761,21 +790,25 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     [user("Add the shifts from this roster.", true), assistant(r.reply), user("Add Elena's shifts.")],
     null,
   );
-  const elena = shiftsOf(r3.queue).map((s) => s.replace(/ Elena( Ruiz)? work /, " Elena work "));
+  // 5c-4: exactly "Elena work…": "Ruiz" is only printed on the roster.
+  const elenaShifts = [
+    "2026-11-30 09:00 Elena work 9 AM–5 PM",
+    "2026-12-02 09:00 Elena work 9 AM–5 PM",
+    "2026-12-03 09:00 Elena work 9 AM–5 PM",
+    "2026-12-05 10:00 Elena work 10 AM–6 PM",
+    "2026-12-06 10:00 Elena work 10 AM–6 PM",
+  ];
   check(
-    "adds Elena's 5 shifts, with her name first",
-    JSON.stringify(elena) ===
-      JSON.stringify(
-        [
-          "2026-11-30 09:00 Elena work 9 AM–5 PM",
-          "2026-12-02 09:00 Elena work 9 AM–5 PM",
-          "2026-12-03 09:00 Elena work 9 AM–5 PM",
-          "2026-12-05 10:00 Elena work 10 AM–6 PM",
-          "2026-12-06 10:00 Elena work 10 AM–6 PM",
-        ].sort(),
-      ),
+    'adds Elena\'s 5 shifts as exactly "Elena work…" (no "Ruiz": she wasn\'t typed with it)',
+    same(r3.queue, elenaShifts),
     JSON.stringify(shiftsOf(r3.queue)),
   );
+  console.log('\n3c. Follow-up typed in small letters: "add elena\'s shifts"');
+  const r3c = await ask(
+    [user("Add the shifts from this roster.", true), assistant(r.reply), user("add elena's shifts")],
+    null,
+  );
+  check('small letters still give "Elena work…" (capital first)', same(r3c.queue, elenaShifts), JSON.stringify(shiftsOf(r3c.queue)));
 
   // 4. Orders written inside the photo: never followed.
   photo = await scenario("4. A schedule with orders written in it (BANANA)", "4-banana.png");

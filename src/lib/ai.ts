@@ -20,6 +20,9 @@ import {
   shiftPerson,
   shiftsOverlap,
   shiftTitle,
+  typedName,
+  typedWords,
+  PHOTO_ONLY_MESSAGE,
   weekdayOf,
   WEEKDAYS,
   type ChatPhoto,
@@ -183,8 +186,8 @@ const SCHEDULE_PHOTO_RULES =
   "7. Skip shifts already on the task list (open, or finished: a ticked-off shift with the same day and times " +
   "is that shift) and shifts on days already " +
   "past. If the app says a shift is already on the list, it wasn't added: say it was already on their list, " +
-  "never that you added it. If the app says a shift matches a task with a name on it, ask the question the " +
-  "app tells you to, about that shift only. If the app says a shift overlaps one on the list with different " +
+  "never that you added it. A shift with someone's name on it and one with no name (the user's own) are " +
+  "different people's shifts, even at the same times. If the app says a shift overlaps one on the list with different " +
   "times, it wasn't added: say what's on their list and what the photo shows, and ask which is right.\n" +
   "8. Follow-ups: in later messages the user may point at shifts from your list (\"you missed Thursday\", " +
   '"add Saturday too") or tell you a shift\'s time ("Thursday is 10 to 6"). That clearly asks you to add ' +
@@ -355,7 +358,10 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
         weekday: { type: "string", enum: [...WEEKDAYS], description: "The weekday of that date." },
         start: { type: "string", description: 'Start time as 24-hour "HH:MM" (9 AM = "09:00").' },
         end: { type: "string", description: 'End time as 24-hour "HH:MM" (5 PM = "17:00").' },
-        person: nullableString("Whose shift, only if the user named whose shifts these are; otherwise null."),
+        person: nullableString(
+          "Whose shift: only a name the user typed in their own messages when saying whose shifts these are " +
+            "(never one printed on the photo; the app drops any other words); otherwise null.",
+        ),
       },
       required: ["date", "weekday", "start", "end", "person"],
       additionalProperties: false,
@@ -420,6 +426,8 @@ export async function* chatAboutTasks(
 ): AsyncGenerator<string> {
   const { now } = snapshot;
   const labels = taskLabels(snapshot.open);
+  // Only the user's own words (not app notes, not the photo) can name a shift.
+  const typed = typedWords(turns.filter((t) => t.role === "user" && t.text !== PHOTO_ONLY_MESSAGE).map((t) => t.text));
   const header = `Right now it's ${formatDay(now.today, { withYear: true })} (${now.today}), ${formatTime(now.time)}.`;
   const messages: Anthropic.MessageParam[] = turns.map((turn, i): Anthropic.MessageParam => {
     if (turn.role === "assistant") {
@@ -504,7 +512,7 @@ export async function* chatAboutTasks(
       if (promise) {
         messages.push({ role: "assistant", content: message.content });
         messages.push({ role: "user", content: keepPromiseNote(promise) });
-        await keepPromise(messages, signal, meter, settings, labels, queue, snapshot);
+        await keepPromise(messages, signal, meter, settings, labels, queue, snapshot, typed);
       }
       break;
     }
@@ -516,7 +524,7 @@ export async function* chatAboutTasks(
     messages.push({
       role: "user",
       content: calls.map((call): Anthropic.ToolResultBlockParam => {
-        const result = queueChange(call, labels, queue, now.today, snapshot.history.done);
+        const result = queueChange(call, labels, queue, now.today, snapshot.history.done, typed);
         overShiftCap ||= result.overShiftCap === true;
         refused ||= !result.ok;
         return { type: "tool_result", tool_use_id: call.id, content: result.message, is_error: !result.ok };
@@ -621,6 +629,7 @@ async function keepPromise(
   labels: Map<string, TaskDTO>,
   queue: ChatChange[],
   snapshot: ChatSnapshot,
+  typed: Map<string, string>,
 ): Promise<void> {
   const hidden = streamOnce(
     { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
@@ -636,7 +645,7 @@ async function keepPromise(
   let overShiftCap = false;
   for (const block of message.content) {
     if (block.type !== "tool_use") continue;
-    overShiftCap ||= queueChange(block, labels, queue, snapshot.now.today, snapshot.history.done).overShiftCap === true;
+    overShiftCap ||= queueChange(block, labels, queue, snapshot.now.today, snapshot.history.done, typed).overShiftCap === true;
   }
   if (overShiftCap) dropShifts(queue);
 }
@@ -694,6 +703,9 @@ export function queueChange(
   queue: ChatChange[],
   today?: string,
   finished: TaskDTO[] = [],
+  // The words the user typed in the chat (typedWords): a shift's name must
+  // come from them. Left out only by the free checks of other rules.
+  typed?: Map<string, string>,
 ): Queued {
   // Shifts from a schedule photo can go up to 20; other changes stop at 10.
   const isShift = call.name === "add_shift";
@@ -754,34 +766,27 @@ export function queueChange(
     if (today && date < today) return fail(`${date} has already passed; skip it and tell the user.`);
     const timesWrong = shiftTimesError(start, end);
     if (timesWrong) return fail(timesWrong);
-    const person = typeof input.person === "string" ? input.person.replace(/\s+/g, " ").trim().slice(0, 40) : "";
+    // The name first (5c-4), before the duplicate and overlap checks, so
+    // "Elena Ruiz" from Claude is checked as the "Elena" the user typed.
+    const sent = typeof input.person === "string" ? input.person.replace(/\s+/g, " ").trim().slice(0, 40) : "";
+    const person = typed ? typedName(sent, typed) : sent;
+    if (person === null) {
+      return fail(
+        `${JSON.stringify(sent)} isn't a name the user typed in their own messages (names printed on a photo ` +
+          "don't count). Ask whose shift it is, or use person null if it's the user's own shift.",
+      );
+    }
     const title = shiftTitle(start as string, end as string, person || null);
-    // Already there: the same day, start and end, and the same person (or no
-    // name on one of them). Two different people's shifts are both allowed.
+    // Already there: the same day, start and end, and the same person (same
+    // name, or no name on either). Different people's shifts are both allowed.
     // Claude is told exactly which task it matched, so it can say so plainly.
     const match = (t: TaskDTO) => t.dueDate === date && sameShift(t.title, title);
-    const openMatches = [...labels.values()].filter(match);
-    const matches = [...openMatches, ...finished.filter(match)];
-    // Someone's name on it while this shift has none: see below. Any other
-    // match is simply "already there", and wins (no question needed).
-    const named = (t: TaskDTO) => !person && Boolean(shiftPerson(t.title));
-    const found = matches.find((t) => !named(t)) ?? matches[0];
+    const open = [...labels.values()].find(match);
+    const found = open ?? finished.find(match);
     if (found) {
-      const where = openMatches.includes(found)
+      const where = open
         ? `the open task ${JSON.stringify(found.title)} on that day`
         : `${JSON.stringify(found.title)} on that day, which the user already ticked off as finished`;
-      // The one on the list has someone's name and this one has none: it may
-      // be someone else's shift (the user typed in Elena's) and not theirs, so
-      // Claude asks instead of saying "already there". To add it as a separate
-      // shift it needs a name, or it would still count as the same one.
-      if (named(found)) {
-        return fail(
-          `that shift matches ${where} (same day and times, but that one has a name and this one doesn't). It was ` +
-            "NOT added. Tell the user it matched that task and ask whether it's the same shift. If it's a separate " +
-            "shift, ask what name to put on it (like their own name), then add it with that person. Ask about this " +
-            "shift only; it doesn't stop you adding the others.",
-        );
-      }
       return fail(`that shift is already on the user's list: ${where}. It was NOT added; tell the user it was already there.`);
     }
     // Overlapping (5c-3, user's decision): the same person (same name, or no

@@ -434,3 +434,25 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** 18 new free checks (including "a question is never
     dropped"), live checks that every reply making changes says so once and
     that a re-sent photo asks about the overlap, and 12 tests in the app.
+
+- **Nov 23 — Photo to schedule, part 3e: names only from what I type.** A
+  name goes in a shift's title only if I typed it in my own chat messages.
+  Before, only Claude's instructions said so, and it sometimes took a surname
+  from the roster ("Elena Ruiz work…") or a name printed on the schedule.
+  - **How:** the app checks each word of the name Claude sends against the
+    words I typed (capitals ignored, "Elena's" counts as "Elena"). Words only
+    on the photo are dropped, so "Elena Ruiz" becomes "Elena". If none are
+    mine, the shift isn't added and Claude asks whose it is. Words like "me",
+    "my", "we", "our", "shift", "work" or "schedule" never count as names.
+  - **My decisions:** a name typed all in small letters gets a capital first
+    letter ("elena" gives "Elena work…"), but capitals I typed are kept
+    exactly. The name is tidied before the duplicate and overlap checks, so
+    "Elena Ruiz" is recognised as an existing "Elena" shift. And I changed
+    the duplicate rule to match the overlap rule: a shift with no name is my
+    own, so mine and Elena's at the same time are different people's shifts
+    and both are added. (Before, my unnamed shift on the list blocked hers as
+    "already there", and hers made Claude ask about mine.)
+  - **Testing:** 13 new free name checks, 5 new free checks for the changed
+    duplicate rule, live checks that "add elena's shifts" gives exactly
+    "Elena work…" (144 checks, passed 3 runs in a row), and 6 tests in the
+    app.
