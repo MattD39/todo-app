@@ -456,3 +456,24 @@ Short entries, added as each new step is finished and committed.
     duplicate rule, live checks that "add elena's shifts" gives exactly
     "Elena work…" (144 checks, passed 3 runs in a row), and 6 tests in the
     app.
+
+- **Nov 23 — Prompt caching for the Chat (saving money).** Every Chat
+  request starts with the same instructions and list of tools (about 4,900
+  tokens). They're now kept in Anthropic's cache for 5 minutes, so later
+  messages read them at a tenth of the price instead of paying in full each
+  time. The rest of the conversation is cached too, so a reply that takes
+  several turns (like adding a week of shifts) re-reads the photo and task
+  list cheaply.
+  - **Result:** a message that changes something costs about $0.0005 instead
+    of $0.0012, and a schedule photo about $0.0013 instead of $0.0025. A full
+    run of the paid checks dropped from about $0.044 to $0.022.
+  - **Also:** the daily $0.15 spending cap now prices cached input exactly
+    (writing to the cache costs 1.25×, reading 0.1×). In localhost mode each
+    Claude request prints a line with its cache numbers, which is how I
+    checked it works.
+  - **My decision:** paid checks now run once per step (free checks still
+    three times), and a new free-only mode runs every free check without
+    calling Claude.
+  - **Testing:** 4 new free price checks (passed 3 times), a live check that
+    a second message reads from the cache (one run, all checks passed), and
+    the cache numbers in my own dev server log.

@@ -2,7 +2,7 @@
 // Checks Photo to schedule: Claude reading made-up work schedules and turning
 // the shifts into tasks.
 //
-// Run with: npm run check:photos
+// Run with: npm run check:photos   (or: npm run check:photos -- --free  for the free checks only)
 //
 // Part 1 (free, no Claude): the photo checks (real photo types only, size
 //   limit), shift titles, the calendar, and the shift rules (the weekday must
@@ -44,7 +44,9 @@ const sp = await jiti.import<typeof import("../src/lib/schedule-photo.ts")>(
 const { cleanChat } = await jiti.import<typeof import("../src/lib/ai-request.ts")>(
   path.join(root, "src/lib/ai-request.ts"),
 );
-const { ClaudeMeter } = await jiti.import<typeof import("../src/lib/claude.ts")>(path.join(root, "src/lib/claude.ts"));
+const { ClaudeMeter, costOf } = await jiti.import<typeof import("../src/lib/claude.ts")>(
+  path.join(root, "src/lib/claude.ts"),
+);
 
 const photosDir = path.join(root, "tests/schedule-photos");
 const NOW = { today: "2026-11-20", time: "10:00" }; // a Friday
@@ -284,6 +286,18 @@ check(
   refusedAsOnList(ai.queueChange(wedShift("11:00", "18:00"), onWed("Work 11 AM–6 PM"), [], NOW.today)),
 );
 
+// Prompt caching prices (Haiku 5.5: $0.10 per million input tokens; cache
+// writes 1.25×, cache reads 0.1×), as the daily spending cap counts them.
+const near = (a: number, b: number) => Math.abs(a - b) < 1e-12;
+// (100,000 tokens: above that, Haiku's higher "long request" price applies.)
+check("cost: 100,000 plain input tokens = $0.01", near(costOf(100_000, 0), 0.01));
+check("cost: 100,000 input read from the cache = $0.001", near(costOf(100_000, 0, 0, 100_000), 0.001));
+check("cost: 100,000 input written to the cache = $0.0125", near(costOf(100_000, 0, 100_000, 0), 0.0125));
+check(
+  "cost: a mix (6,000 read + 1,000 written + 500 new in, 200 out) adds up",
+  near(costOf(7_500, 200, 1_000, 6_000), (500 * 0.1 + 1_000 * 0.125 + 6_000 * 0.01 + 200 * 0.5) / 1_000_000),
+);
+
 // Names (5c-4): a name goes in a title only if the user typed it.
 const typed = (...texts: string[]) => sp.typedWords(texts);
 const nameCases: [string, string, Map<string, string>, string | null][] = [
@@ -480,6 +494,7 @@ async function loadPhoto(file: string): Promise<{ photo: ChatPhoto; tokens: numb
 
 type Result = { reply: string; queue: ChatChange[]; cost: number };
 let totalCost = 0;
+let lastMeter: InstanceType<typeof ClaudeMeter> | undefined; // the newest ask()'s meter
 
 async function ask(
   turns: ChatTurn[],
@@ -499,7 +514,11 @@ async function ask(
   for (const c of queue)
     console.log(`  would add: ${c.summary}${c.kind === "add" && c.shift ? "" : "  (NOT a shift)"}`);
   if (queue.length === 0) console.log("  would add: nothing");
-  console.log(`  cost: $${meter.costUsd.toFixed(4)} (${meter.inputTokens} tokens in, ${meter.outputTokens} out)`);
+  console.log(
+    `  cost: $${meter.costUsd.toFixed(4)} (${meter.inputTokens} tokens in: ${meter.cacheReadTokens} read from ` +
+      `cache, ${meter.cacheWriteTokens} written to cache; ${meter.outputTokens} out)`,
+  );
+  lastMeter = meter;
   // 5c-3: a reply that makes changes says what it'll do once, not twice.
   if (queue.length > 0) {
     const promises = reply.split(/(?<=[.!?])\s+|\n+/).filter((s) => ai.unkeptPromise(s) !== null);
@@ -528,7 +547,9 @@ async function scenario(name: string, file: string) {
   return loaded.photo;
 }
 
-if (process.env.ANTHROPIC_API_KEY === undefined) {
+if (process.argv.includes("--free")) {
+  console.log("\n--free: skipping the Claude checks (they cost money).");
+} else if (process.env.ANTHROPIC_API_KEY === undefined) {
   console.log("\nANTHROPIC_API_KEY is missing: skipping the Claude checks.");
 } else {
   console.log("\nPart 2: Claude reads the made-up schedules");
@@ -537,6 +558,15 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
   console.log('\n0. Normal chat (no photo): "Add milk for Monday."');
   let r = await ask([user("Add milk for Monday.")], null, [task("d1", "Call the dentist")]);
   check("queues one new task", r.queue.length === 1 && r.queue[0].kind === "add", JSON.stringify(r.queue));
+  // Prompt caching: a second message soon after reads the instructions and
+  // tools from the cache instead of paying full price for them again.
+  console.log('\n0b. Another message straight after: "What\'s due today?" (prompt caching)');
+  r = await ask([user("What's due today?")], null, [task("d1", "Call the dentist")]);
+  check(
+    "reads the instructions and tools from the cache (prompt caching works)",
+    (lastMeter?.cacheReadTokens ?? 0) > 1000,
+    `${lastMeter?.cacheReadTokens ?? 0} tokens read from cache`,
+  );
 
   // 1. A clear week with dates.
   let photo =await scenario("1. A clear week with dates", "1-clear-week.png");

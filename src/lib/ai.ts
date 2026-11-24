@@ -402,6 +402,21 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// Prompt caching for the Chat (saves money). Claude reads the tools, then the
+// instructions, then the conversation. The instructions and tools never
+// change, so a marker after the instructions keeps both in the cache for 5
+// minutes (each use restarts the 5 minutes): every message and every round
+// within a 5-minute gap reads them at a tenth of the price. The top-level
+// marker also caches the conversation so far, which the next round of the
+// same reply reuses (the photo included). Nothing that changes (the time, the
+// task list) comes before the instructions' marker, so it can't spoil it.
+// Check it in the dev server's window: "read from cache" should be above 0
+// from the second request on.
+const CHAT_CACHING = {
+  system: [{ type: "text" as const, text: CHAT_PROMPT, cache_control: { type: "ephemeral" as const } }],
+  cache_control: { type: "ephemeral" as const },
+};
+
 // Most back-and-forths with Claude for one message (each round can use tools).
 const MAX_ROUNDS = 4;
 
@@ -469,7 +484,7 @@ export async function* chatAboutTasks(
   let refused = false; // the app turned down at least one change in this reply
   let shown = ""; // the text the user has been sent so far
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const params = { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" as const } };
+    const params = { ...CHAT_CACHING, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" as const } };
     let message: Anthropic.Message;
     if (round === 0) {
       message = yield* streamOnce(params, signal, false, meter, settings);
@@ -632,7 +647,7 @@ async function keepPromise(
   typed: Map<string, string>,
 ): Promise<void> {
   const hidden = streamOnce(
-    { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
+    { ...CHAT_CACHING, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
     signal,
     false,
     meter,
@@ -956,7 +971,7 @@ async function* streamAnswer(
 // a blank line before this round's text, when an earlier round already wrote some.
 // What the request cost goes into `meter`, even if it's stopped part-way.
 async function* streamOnce(
-  params: Pick<Anthropic.MessageStreamParams, "system" | "messages" | "tools" | "tool_choice">,
+  params: Pick<Anthropic.MessageStreamParams, "system" | "messages" | "tools" | "tool_choice" | "cache_control">,
   signal: AbortSignal,
   gapFirst: boolean,
   meter: ClaudeMeter,
