@@ -89,7 +89,12 @@ function TaskRow({
           ↻
         </span>
       ) : (
-        <CheckButton task={task} today={now.today} locked={locked} />
+        // In edit mode (Today, Upcoming, Done) the tick box folds away to no
+        // width, so the title moves left into its place instead of being cut
+        // off (the -mr-3 cancels the gap beside it). See SwipeRow.
+        <span className="flex-none transition-[width,margin,opacity] duration-200 group-data-[editing=true]/row:-mr-3 group-data-[editing=true]/row:w-0 group-data-[editing=true]/row:overflow-hidden group-data-[editing=true]/row:opacity-0">
+          <CheckButton task={task} today={now.today} locked={locked} />
+        </span>
       )}
       {/* Tapping the title area opens the editor. */}
       <OpenTaskButton task={task} className={`min-w-0 flex-1 text-left ${planned ? "opacity-60" : ""}`}>

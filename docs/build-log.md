@@ -510,3 +510,17 @@ Short entries, added as each new step is finished and committed.
     the MCP check, and 10 tests in the app. The "Finished today" entry test
     couldn't run yet: repeating tasks don't show on the Done tab (next on the
     list to fix).
+
+- **Nov 24 — Select several tasks, part c: names always readable.** In edit
+  mode, and when a row was swiped open for Delete, the whole row slid left
+  and the start of each name was cut off ("Test 1" showed as "1"), which
+  made it easy to delete the wrong task.
+  - **Fix:** the row's text never moves left now. The red Delete button (or
+    the select circle) slides in over the row's right side, and once it's
+    fully out the text makes room and wraps onto more lines. In edit mode the
+    tick box folds away, so the name moves left into its place.
+  - **Also:** the round Next.js badge shown on localhost covered the Cancel
+    button. No corner is free on a phone-width screen, and padding the bar
+    would waste space on the real phone, so I turned the badge off (Next.js
+    still shows errors without it).
+  - **Testing:** 16 tests in the app.

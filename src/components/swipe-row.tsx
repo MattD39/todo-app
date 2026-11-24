@@ -9,16 +9,21 @@ import { useEditMode } from "./edit-mode";
 // iPhone's own apps. Swiping back right, tapping the row or tapping anywhere
 // else closes it. Deleting shows "Deleted · Undo" for a few seconds.
 //
+// The row's text never slides left: the Delete button slides in over the
+// row's right side instead, and once it's fully out the text makes room and
+// wraps, so the start of a task's name always shows (no deleting the wrong
+// task because "Test 1" read as "1").
+//
 // Telling a swipe from a scroll or a tap: nothing happens until your finger
 // (or mouse) has moved a little. Mostly sideways → it's a swipe; mostly up or
 // down → the page scrolls as normal and the row ignores it. After a swipe,
 // the tap that ends it is swallowed, so it can't open or tick the task.
 //
-// Edit mode (see edit-mode.tsx): the row slides over the same way and a
-// select circle takes the Delete button's place. Tapping anywhere on the row
-// selects it; its tick box and title can't be tapped, and it can't be swiped.
+// Edit mode (see edit-mode.tsx): the tick box folds away and a select circle
+// takes the Delete button's place. Tapping anywhere on the row selects it;
+// its tick box and title can't be tapped, and it can't be swiped.
 
-const DELETE_WIDTH = 88; // px: how far the row slides to show the button
+const DELETE_WIDTH = 88; // px: the Delete button's width when fully out
 const DECIDE_AFTER = 8; // px of movement before deciding swipe vs scroll
 
 type Target = { taskId: string } | { completionId: string };
@@ -168,7 +173,8 @@ export function SwipeRow({
 
   if (gone) return null;
 
-  const shown = editing ? -DELETE_WIDTH : offset;
+  const reveal = -offset; // how much of the Delete button shows (px)
+  const roomOnRight = editing || open; // the button or circle is fully showing
 
   return (
     <li
@@ -176,7 +182,7 @@ export function SwipeRow({
       // Keyboard focus in edit mode: a 2px ring drawn inside the row, on top
       // of everything in it (the row clips the browser's own outline down to a
       // thin line along the top). Only for Tab focus, not clicks.
-      className="relative overflow-hidden border-t border-line outline-none first:border-t-0 focus-visible:after:pointer-events-none focus-visible:after:absolute focus-visible:after:inset-[3px] focus-visible:after:z-[1] focus-visible:after:rounded-[10px] focus-visible:after:shadow-[inset_0_0_0_2px_var(--accent)]"
+      className="relative overflow-hidden border-t border-line outline-none first:border-t-0 focus-visible:after:pointer-events-none focus-visible:after:absolute focus-visible:after:inset-[3px] focus-visible:after:z-[2] focus-visible:after:rounded-[10px] focus-visible:after:shadow-[inset_0_0_0_2px_var(--accent)]"
       {...(editing && {
         role: "checkbox",
         "aria-checked": selected,
@@ -186,16 +192,43 @@ export function SwipeRow({
         onKeyDown: onEditKeyDown,
       })}
     >
-      {/* Behind the row; shows as the row slides left. */}
+      <div
+        // In edit mode the tick box and title are out of reach: no tapping,
+        // no Tab, not read out separately (the row itself is the checkbox).
+        inert={editing}
+        // The tick box folds away in edit mode (see TaskRow in task-list.tsx).
+        data-editing={editing}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+        onClickCapture={onClickCapture}
+        // pan-y: up/down still scrolls the page; sideways comes to us.
+        className={`group/row relative flex touch-pan-y items-start gap-3 bg-surface ${
+          dragging || editing ? "select-none" : ""
+        } ${className}`}
+        style={{
+          // Set here so it beats the row's own colour (e.g. an overdue row's).
+          ...(selected && { backgroundColor: "var(--accent-soft)" }),
+          // The text never moves left, so a name's start always shows. When
+          // the Delete button or select circle is fully showing, the text makes
+          // room for it on the right and wraps onto more lines instead.
+          ...(roomOnRight && { paddingRight: `calc(${DELETE_WIDTH}px + 0.875rem)` }),
+          transition: "padding-right 0.2s ease-out, background-color 0.2s",
+        }}
+      >
+        {children}
+      </div>
+      {/* On top of the row's right side; slides in from the right edge. */}
       {editing ? (
         <span
           aria-hidden
-          className={`absolute inset-y-0 right-0 flex items-center justify-center ${selected ? "bg-accent-soft" : "bg-surface"}`}
+          className="absolute inset-y-0 right-0 z-[1] flex items-center justify-center"
           style={{ width: DELETE_WIDTH }}
         >
           <span
             className={`grid size-[26px] place-items-center rounded-full border-2 text-[0.9rem] font-bold ${
-              selected ? "border-accent bg-accent text-accent-ink" : "border-muted"
+              selected ? "border-accent bg-accent text-accent-ink" : "border-muted bg-surface"
             }`}
           >
             {selected ? "✓" : ""}
@@ -207,34 +240,12 @@ export function SwipeRow({
           onClick={remove}
           tabIndex={open ? 0 : -1}
           aria-hidden={!open}
-          className="absolute inset-y-0 right-0 flex items-center justify-center bg-high font-bold text-white"
-          style={{ width: Math.max(DELETE_WIDTH, -offset) }}
+          className="absolute inset-y-0 right-0 z-[1] flex items-center justify-center overflow-hidden bg-high font-bold whitespace-nowrap text-white"
+          style={{ width: reveal, transition: dragging ? "none" : "width 0.2s ease-out" }}
         >
           Delete
         </button>
       )}
-      <div
-        // In edit mode the tick box and title are out of reach: no tapping,
-        // no Tab, not read out separately (the row itself is the checkbox).
-        inert={editing}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerEnd}
-        onPointerCancel={onPointerEnd}
-        onClickCapture={onClickCapture}
-        // pan-y: up/down still scrolls the page; sideways comes to us.
-        className={`relative flex touch-pan-y items-start gap-3 bg-surface ${
-          dragging || editing ? "select-none" : ""
-        } ${className}`}
-        style={{
-          // Set here so it beats the row's own colour (e.g. an overdue row's).
-          ...(selected && { backgroundColor: "var(--accent-soft)" }),
-          transform: `translateX(${shown}px)`,
-          transition: dragging ? "none" : "transform 0.2s ease-out",
-        }}
-      >
-        {children}
-      </div>
     </li>
   );
 }
