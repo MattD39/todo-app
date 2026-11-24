@@ -16,9 +16,12 @@ import { createContext, use, useCallback, useEffect, useMemo, useRef, useState }
 type EditMode = {
   editing: boolean;
   selected: ReadonlySet<string>;
+  onScreen: ReadonlySet<string>; // every row showing now (for Select all)
   start: () => void;
   stop: () => void;
   toggle: (key: string) => void;
+  selectAll: () => void;
+  selectNone: () => void;
   // Each row says it's on the screen; a row that goes away (the list
   // refreshed and it's gone) is dropped from the selection.
   register: (key: string) => () => void;
@@ -34,7 +37,8 @@ export function useEditMode(): EditMode | null {
 export function EditModeProvider({ children }: { children: React.ReactNode }) {
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const onScreen = useRef(new Map<string, number>()); // key → how many rows show it
+  const rowCounts = useRef(new Map<string, number>()); // key → how many rows show it
+  const [onScreen, setOnScreen] = useState<ReadonlySet<string>>(new Set());
 
   const start = useCallback(() => setEditing(true), []);
   const stop = useCallback(() => {
@@ -51,15 +55,21 @@ export function EditModeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const selectAll = useCallback(() => setSelected(new Set(rowCounts.current.keys())), []);
+  const selectNone = useCallback(() => setSelected(new Set()), []);
+
   const register = useCallback((key: string) => {
-    onScreen.current.set(key, (onScreen.current.get(key) ?? 0) + 1);
+    const before = rowCounts.current.get(key) ?? 0;
+    rowCounts.current.set(key, before + 1);
+    if (before === 0) setOnScreen(new Set(rowCounts.current.keys()));
     return () => {
-      const left = (onScreen.current.get(key) ?? 1) - 1;
+      const left = (rowCounts.current.get(key) ?? 1) - 1;
       if (left > 0) {
-        onScreen.current.set(key, left);
+        rowCounts.current.set(key, left);
         return;
       }
-      onScreen.current.delete(key);
+      rowCounts.current.delete(key);
+      setOnScreen(new Set(rowCounts.current.keys()));
       setSelected((before) => {
         if (!before.has(key)) return before;
         const next = new Set(before);
@@ -81,8 +91,8 @@ export function EditModeProvider({ children }: { children: React.ReactNode }) {
   }, [editing, stop]);
 
   const value = useMemo(
-    () => ({ editing, selected, start, stop, toggle, register }),
-    [editing, selected, start, stop, toggle, register],
+    () => ({ editing, selected, onScreen, start, stop, toggle, selectAll, selectNone, register }),
+    [editing, selected, onScreen, start, stop, toggle, selectAll, selectNone, register],
   );
   return <EditModeContext value={value}>{children}</EditModeContext>;
 }

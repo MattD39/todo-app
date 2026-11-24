@@ -492,3 +492,21 @@ Short entries, added as each new step is finished and committed.
     ring drawn inside the row, on top of its contents, shown only for
     keyboard focus.
   - **Testing:** 11 tests in the app plus 6 for the focus ring.
+
+- **Nov 24 — Select several tasks, part b: the bar and the delete.** In edit
+  mode a bar covers the tab bar with Cancel, Select all (or Select none) and
+  a red Delete (N). Delete removes everything selected in one go, and every
+  whole task goes into Recently deleted with its steps, notes and history,
+  exactly like swipe to delete (the same copying code, now shared). A
+  "Finished today" entry deletes just that entry.
+  - **How it stays safe and quick:** one database transaction, so all of it
+    happens or none of it does; the same seven database steps whether it's 2
+    tasks or 200 (200 took 0.6 seconds); at most 200 at once. Tasks already
+    deleted elsewhere, or someone else's, are skipped and counted ("1 was
+    already gone"). Only ids are sent from the browser, well inside Next.js's
+    1 MB limit for these requests (I checked the Next.js 16 docs first).
+  - **Testing:** a new free check (`npm run check:batch-delete`, 20 checks
+    with two made-up people, passed 3 times), the database privacy tests and
+    the MCP check, and 10 tests in the app. The "Finished today" entry test
+    couldn't run yet: repeating tasks don't show on the Done tab (next on the
+    list to fix).

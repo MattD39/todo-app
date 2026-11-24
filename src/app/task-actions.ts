@@ -9,6 +9,7 @@ import {
   createTask,
   deleteStep,
   deleteFromBin,
+  deleteManyWithCopies,
   deleteTaskWithCopy,
   deleteTickWithCopy,
   emptyBin,
@@ -22,6 +23,7 @@ import {
   TaskError,
   undoCompletion,
   updateTask,
+  type BatchDeleteResult,
   type BinItem,
   type DeletedTask,
   type DeletedTick,
@@ -145,6 +147,13 @@ export async function swipeDelete(
     return run("delete", async () => ({ task: await deleteTaskWithCopy(taskId) }));
   }
   return { error: "Something went wrong." };
+}
+
+// Edit mode: deletes the selected rows together (checked again in tasks.ts).
+// Each whole task goes into Recently deleted, the same as swipe to delete.
+// The result says how many were deleted or already gone.
+export async function deleteSelected(targets: unknown): Promise<ActionResult & { value?: BatchDeleteResult }> {
+  return run("delete", () => deleteManyWithCopies(targets));
 }
 
 // Undo for swipe to delete: puts the copy back (checked again in tasks.ts).

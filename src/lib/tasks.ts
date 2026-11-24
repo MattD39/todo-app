@@ -419,41 +419,115 @@ export type DeletedTick = {
 export async function deleteTaskWithCopy(id: string): Promise<DeletedTask> {
   return asCurrentUser(async (tx, userId) => {
     const current = await findOwnedTask(tx, userId, id);
-    const row = await tx.task.findFirstOrThrow({
-      where: { id: current.id, userId },
-      include: {
-        category: true,
-        subtasks: { orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
-        completions: { orderBy: { createdAt: "asc" } },
-      },
-    });
+    const row = await tx.task.findFirstOrThrow({ where: { id: current.id, userId }, include: COPY_INCLUDE });
     const { count } = await tx.task.deleteMany({ where: { id: row.id, userId } });
     if (count === 0) throw new TaskError("That task doesn't exist.");
-    const copy: DeletedTask = {
-      id: row.id,
-      title: row.title,
-      notes: row.notes,
-      priority: row.priority,
-      dueDate: row.dueDate ? dateFromDb(row.dueDate) : null,
-      dueTime: row.dueTime,
-      repeat: row.repeat,
-      done: row.done,
-      doneAt: row.doneAt?.toISOString() ?? null,
-      category: row.category?.name ?? null,
-      createdAt: row.createdAt.toISOString(),
-      steps: row.subtasks.map((s) => ({
-        id: s.id,
-        title: s.title,
-        done: s.done,
-        position: s.position,
-        createdAt: s.createdAt.toISOString(),
-      })),
-      ticks: row.completions.map(tickCopy),
-    };
+    const copy = copyOf(row);
     // In the same transaction: the task is never gone without its copy
     // being safely in the bin.
     await putInBin(tx, userId, copy);
     return copy;
+  });
+}
+
+// Everything a deleted task's copy needs (steps in order, its whole history).
+const COPY_INCLUDE = {
+  category: true,
+  subtasks: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }] },
+  completions: { orderBy: { createdAt: "asc" as const } },
+};
+
+function copyOf(row: Prisma.TaskGetPayload<{ include: typeof COPY_INCLUDE }>): DeletedTask {
+  return {
+    id: row.id,
+    title: row.title,
+    notes: row.notes,
+    priority: row.priority,
+    dueDate: row.dueDate ? dateFromDb(row.dueDate) : null,
+    dueTime: row.dueTime,
+    repeat: row.repeat,
+    done: row.done,
+    doneAt: row.doneAt?.toISOString() ?? null,
+    category: row.category?.name ?? null,
+    createdAt: row.createdAt.toISOString(),
+    steps: row.subtasks.map((s) => ({
+      id: s.id,
+      title: s.title,
+      done: s.done,
+      position: s.position,
+      createdAt: s.createdAt.toISOString(),
+    })),
+    ticks: row.completions.map(tickCopy),
+  };
+}
+
+// ─── Deleting several at once (Edit mode on the task lists) ──────────────────
+
+// Most rows one batch can delete (a screen never shows anywhere near this).
+export const MAX_BATCH_DELETE = 200;
+
+// What a batch delete did. The task ids and tick copies are for Undo.
+export type BatchDeleteResult = {
+  tasks: number; // whole tasks deleted (each now in Recently deleted)
+  entries: number; // "Finished today" entries deleted (one tick of a repeating task)
+  missing: number; // already gone (deleted elsewhere), so skipped
+  taskIds: string[];
+  ticks: DeletedTick[];
+};
+
+// Deletes the selected rows in one go: whole tasks (each copied into Recently
+// deleted, exactly like swipe to delete) and single entries of repeating
+// tasks (like swiping one). All in one transaction: everything happens or
+// nothing does. Rows that are already gone, or aren't this user's, are
+// skipped and counted as missing. An entry whose task is in the same batch
+// goes with its task. `targets` comes from the browser, so it's checked here.
+export async function deleteManyWithCopies(targets: unknown): Promise<BatchDeleteResult> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!Array.isArray(targets) || targets.length === 0) throw new TaskError("Nothing was selected.");
+  if (targets.length > MAX_BATCH_DELETE) {
+    throw new TaskError(`You can delete up to ${MAX_BATCH_DELETE} at a time.`);
+  }
+  const taskIds = new Set<string>();
+  const tickIds = new Set<string>();
+  for (const target of targets) {
+    const { taskId, completionId } = asObject(target);
+    if (isUuid(taskId)) taskIds.add(taskId);
+    else if (isUuid(completionId)) tickIds.add(completionId);
+    else throw new TaskError("Something went wrong. Try again.");
+  }
+
+  return asCurrentUser(async (tx, userId) => {
+    // Read first (a fixed number of queries, however many are selected, so a
+    // big batch stays quick).
+    const rows = await tx.task.findMany({ where: { id: { in: [...taskIds] }, userId }, include: COPY_INCLUDE });
+    const ticks = await tx.taskCompletion.findMany({ where: { id: { in: [...tickIds] }, task: { userId } } });
+    const deletingTask = new Set(rows.map((r) => r.id));
+    const ownTicks = ticks.filter((t) => !deletingTask.has(t.taskId)); // the rest go with their task
+
+    const copies = rows.map(copyOf);
+    if (copies.length > 0) {
+      // Into the bin in one statement, in the same transaction as the delete,
+      // so a task is never gone without its copy being safely in the bin. (A
+      // task deleted again after a restore replaces its old copy.)
+      await clearOldFromBin(tx, userId);
+      await tx.recentlyDeleted.deleteMany({ where: { id: { in: [...deletingTask] }, userId } });
+      await tx.$executeRaw`
+        INSERT INTO "RecentlyDeleted" ("id", "userId", "copy")
+        SELECT (e->>'id')::uuid, ${userId}::uuid, e
+        FROM jsonb_array_elements(${JSON.stringify(copies)}::jsonb) AS e`;
+      await tx.task.deleteMany({ where: { id: { in: [...deletingTask] }, userId } });
+    }
+    if (ownTicks.length > 0) {
+      await tx.taskCompletion.deleteMany({ where: { id: { in: ownTicks.map((t) => t.id) }, task: { userId } } });
+    }
+
+    return {
+      tasks: rows.length,
+      entries: ownTicks.length,
+      missing: taskIds.size - rows.length + (tickIds.size - ticks.length),
+      taskIds: rows.map((r) => r.id),
+      ticks: ownTicks.map(tickCopy),
+    };
   });
 }
 

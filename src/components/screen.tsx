@@ -11,6 +11,7 @@ import { SettingsButton, SettingsButtonPlaceholder } from "./settings-menu";
 import { RefreshOnReturn } from "./refresh-on-return";
 import { ChatTabDot } from "./chat-tab-dot";
 import { EditButton, EditModeProvider } from "./edit-mode";
+import { SelectionBar } from "./selection-bar";
 
 export { Status } from "./status";
 
@@ -129,6 +130,8 @@ function ScreenFrame({ tab, data, children }: { tab: Tab; data: ScreenData; chil
       {children}
 
       <TabBar current={tab} category={data.category} />
+      {/* Covers the tab bar while selecting tasks (edit mode only). */}
+      <SelectionBar />
     </TaskEditorProvider>
   );
 }
