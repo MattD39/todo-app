@@ -408,3 +408,29 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** 17 new free checks and 3 new live checks (89 checks, passed
     3 runs in a row), and 8 tests in the app, including Undo and keeping a
     name.
+
+- **Nov 23 — Photo to schedule, part 3d: no repeated sentences, and
+  overlapping shifts.** Claude's replies no longer say the same thing twice
+  ("I'll add Thursday." followed by "I'll add the Thursday shift.").
+  - **Cause:** a reply can take two turns: Claude asks for the change, the
+    app answers, then Claude writes again, and its instructions said to
+    write a closing sentence after using the tools, so it sometimes wrote
+    one in both turns.
+  - **Fix:** clearer instructions (say it once, after the app answers), plus
+    a safety net. The app briefly holds back the second turn's text and drops
+    a sentence only if it's a plain promise repeating an earlier one (same
+    days, dates and times) and every change went through. **My rule:** it
+    never drops a question or anything else, so "What time is your Thursday
+    shift?" always shows, and so does Claude's explanation when a change was
+    refused.
+  - **Problem found in my testing:** after I fixed Wednesday's shift to end
+    at 6, re-sending the photo (which says 7) added a second Wednesday shift,
+    and Claude asked for Thursday's time although Thursday was on my list.
+    **My decision:** if the same person (same name, or no name on either)
+    already has a shift that day whose times overlap, the app doesn't add it;
+    Claude shows both times and asks which is right. Split shifts that don't
+    overlap are still added. Claude also no longer asks for a day's time when
+    that day already has a shift on the list.
+  - **Testing:** 18 new free checks (including "a question is never
+    dropped"), live checks that every reply making changes says so once and
+    that a re-sent photo asks about the overlap, and 12 tests in the app.

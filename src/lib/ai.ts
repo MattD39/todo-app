@@ -18,6 +18,7 @@ import {
   sameShift,
   shiftName,
   shiftPerson,
+  shiftsOverlap,
   shiftTitle,
   weekdayOf,
   WEEKDAYS,
@@ -171,7 +172,9 @@ const SCHEDULE_PHOTO_RULES =
   "4. Once whose shifts and which week are clear, add every shift you can read clearly in that same reply, " +
   'one add_shift each, with its weekday. Don\'t ask "Are these your shifts?" or for any other go-ahead ' +
   "first: the user can Undo any of them. If a shift's time is unreadable, or AM/PM is genuinely unclear, " +
-  "don't add that one: ask about it (still add the clear ones). " +
+  "don't add that one: ask about it (still add the clear ones), UNLESS the task list already has a shift " +
+  "that day (open or finished): then don't ask for its time; say that day is already on their list as that " +
+  "task. " +
   'Common shift times like "9-5" mean 9 AM to 5 PM. Days off (OFF, blank, a dash) aren\'t tasks. ' +
   "A shift ending after midnight goes on the day it starts.\n" +
   `5. If there are more than ${MAX_SHIFTS_PER_MESSAGE} shifts to add, add none: say so and ask for one week ` +
@@ -181,7 +184,8 @@ const SCHEDULE_PHOTO_RULES =
   "is that shift) and shifts on days already " +
   "past. If the app says a shift is already on the list, it wasn't added: say it was already on their list, " +
   "never that you added it. If the app says a shift matches a task with a name on it, ask the question the " +
-  "app tells you to, about that shift only.\n" +
+  "app tells you to, about that shift only. If the app says a shift overlaps one on the list with different " +
+  "times, it wasn't added: say what's on their list and what the photo shows, and ask which is right.\n" +
   "8. Follow-ups: in later messages the user may point at shifts from your list (\"you missed Thursday\", " +
   '"add Saturday too") or tell you a shift\'s time ("Thursday is 10 to 6"). That clearly asks you to add ' +
   "them: add only the shifts they point at, with the time they give or the time in your list, calling " +
@@ -233,9 +237,11 @@ const CHAT_PROMPT =
   `message, or ${MAX_SHIFTS_PER_MESSAGE} shifts from a schedule photo) and shows a ✓ or ✗ line for each one, ` +
   "with an Undo button. The user can also press Stop " +
   "before then, and then nothing is saved. Saving can fail, so you never know whether it worked: never say " +
-  "a change is done, saved or added. After using the tools, write one short sentence in the future tense, " +
-  "like \"I'll add it for Friday.\" or \"I'll move both to Monday.\" The app lists the changes itself, so " +
-  "don't repeat them. If a tool says a change wasn't queued, fix it or tell the user.\n\n" +
+  "a change is done, saved or added. Write one short sentence in the future tense about your changes, " +
+  "like \"I'll add it for Friday.\" or \"I'll move both to Monday.\", ONCE: after the app has answered " +
+  "your tool calls, not before them as well (before tool calls, write only what you need to, like the " +
+  "\"Here's what I read\" list for a photo). The app lists the changes itself, so don't repeat them. If a " +
+  "tool says a change wasn't queued, fix it or tell the user.\n\n" +
   "Before a message, the app may add a note saying what happened to your earlier changes: saved, undone " +
   "by the user, not saved (with the reason), or stopped. Trust that note over your own earlier words and " +
   'say so plainly, e.g. "You undid that, so it\'s still due Thursday." An undo means the user didn\'t ' +
@@ -452,14 +458,30 @@ export async function* chatAboutTasks(
   let written = ""; // all of Claude's text in this reply
   let usedTools = false;
   let overShiftCap = false; // tried to add more than 20 shifts: none are added
+  let refused = false; // the app turned down at least one change in this reply
+  let shown = ""; // the text the user has been sent so far
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const message: Anthropic.Message = yield* streamOnce(
-      { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" } },
-      signal,
-      wroteSomething,
-      meter,
-      settings,
-    );
+    const params = { system: CHAT_PROMPT, messages, tools: CHAT_TOOLS, tool_choice: { type: "auto" as const } };
+    let message: Anthropic.Message;
+    if (round === 0) {
+      message = yield* streamOnce(params, signal, false, meter, settings);
+    } else {
+      // A later round's text is held back until the round ends (it's usually
+      // one short sentence), so a repeated promise can be left out (5c-3).
+      const held = streamOnce(params, signal, false, meter, settings);
+      let text = "";
+      let step = await held.next();
+      for (; !step.done; step = await held.next()) text += step.value;
+      message = step.value;
+      const final = !message.content.some((b) => b.type === "tool_use");
+      const show = final ? laterRoundText(shown, text, !refused) : text;
+      if (show.trim()) {
+        const piece = `${shown.trim() ? "\n\n" : ""}${show.trim()}`;
+        shown += piece;
+        yield piece;
+      }
+    }
+    if (round === 0) for (const b of message.content) if (b.type === "text") shown += b.text;
     wroteSomething ||= message.content.some((b) => b.type === "text" && b.text.trim() !== "");
     for (const b of message.content) if (b.type === "text") written += `${b.text}\n`;
 
@@ -496,6 +518,7 @@ export async function* chatAboutTasks(
       content: calls.map((call): Anthropic.ToolResultBlockParam => {
         const result = queueChange(call, labels, queue, now.today, snapshot.history.done);
         overShiftCap ||= result.overShiftCap === true;
+        refused ||= !result.ok;
         return { type: "tool_result", tool_use_id: call.id, content: result.message, is_error: !result.ok };
       }),
     });
@@ -515,10 +538,68 @@ export async function* chatAboutTasks(
 // answered yet, so making them now would be guessing.
 // Exported for scripts/check-photos.mts.
 export function unkeptPromise(text: string): string | null {
-  const promise = /\bI(?:'ll|’ll| will)\s+(?:also\s+|now\s+)?(?:add|change|move|update|fix|tick|put|rename|set|mark)\b/i;
-  const offer = /\?|\bif\b|\bonce\b|\bwhen\b|\bafter\b|\bwant\b|tell me|let me know/i;
-  const sentences = text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim());
-  return sentences.find((s) => promise.test(s) && !offer.test(s)) ?? null;
+  return sentencesOf(text).find(isPlainPromise) ?? null;
+}
+
+// "I'll add…", "I'll change…": Claude saying it will make a change.
+const PROMISE = /\bI(?:'ll|’ll| will)\s+(?:also\s+|now\s+)?(?:add|change|move|update|fix|tick|put|rename|set|mark)\b/i;
+// A sentence that asks the user something or waits for them: a question, an
+// offer for later, or a request for a time, a shift or the photo.
+const ASKS =
+  /\?|\bif\b|\bonce\b|\bwhen\b|\bafter\b|\bwant\b|\bwhich\b|\bconfirm\b|tell me|let me know|what time|send (?:me )?(?:the|a) (?:photo|picture)/i;
+
+// A promise that doesn't ask or wait for anything.
+function isPlainPromise(sentence: string): boolean {
+  return PROMISE.test(sentence) && !ASKS.test(sentence);
+}
+
+function sentencesOf(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// The days, dates and times a sentence mentions, written one way: "thu",
+// "nov 26", "9 am", "9:30 am". Used to tell whether a promise repeats one.
+function whenWords(text: string): Set<string> {
+  const words = new Set<string>();
+  const lower = text.toLowerCase().replace(/[’']s\b/g, "");
+  for (const m of lower.matchAll(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/g)) words.add(m[1]);
+  for (const m of lower.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/g)) {
+    words.add(`${m[1]} ${Number(m[2])}`);
+  }
+  for (const m of lower.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\b/g)) {
+    words.add(`${Number(m[1])}${m[2] && m[2] !== "00" ? `:${m[2]}` : ""} ${m[3]}m`);
+  }
+  return words;
+}
+
+// 5c-3: what to show of a later round's text (written after the app answered
+// Claude's changes, in a round that asked for no more). Claude sometimes
+// repeats its closing sentence there ("I'll add Thursday." … "I'll add the
+// Thursday shift."). A sentence is dropped only if ALL of these are true:
+// - it's a plain promise that asks nothing (questions always show);
+// - the text already shown has a plain promise, and every day, date and time
+//   this one mentions is in those earlier promises (so it repeats them);
+// - every change in the reply was queued (`allQueued`): if one was refused,
+//   the later text is where Claude explains, so it all shows.
+// Anything else is kept, word for word. Exported for scripts/check-photos.mts.
+export function laterRoundText(shown: string, later: string, allQueued: boolean): string {
+  const earlier = sentencesOf(shown).filter(isPlainPromise);
+  if (!allQueued || earlier.length === 0) return later;
+  const promised = whenWords(earlier.join(" "));
+  const repeats = (s: string) => isPlainPromise(s) && [...whenWords(s)].every((w) => promised.has(w));
+  const kept = later
+    .split("\n")
+    .map((line) =>
+      line
+        .split(/(?<=[.!?])\s+/)
+        .filter((s) => !repeats(s.trim()))
+        .join(" "),
+    )
+    .join("\n");
+  return kept.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function keepPromiseNote(promise: string): string {
@@ -702,6 +783,27 @@ export function queueChange(
         );
       }
       return fail(`that shift is already on the user's list: ${where}. It was NOT added; tell the user it was already there.`);
+    }
+    // Overlapping (5c-3, user's decision): the same person (same name, or no
+    // name on either) already has a shift that day whose times overlap this
+    // one's, like "Work 11 AM–6 PM" on the list and 11 AM–7 PM in the photo.
+    // One of them is wrong, so it isn't added: Claude asks which is right.
+    // Shifts that don't overlap (split shifts) are still added.
+    const samePerson = (t: TaskDTO) => shiftPerson(t.title) === person.toLowerCase();
+    const overlaps = (t: TaskDTO) => t.dueDate === date && samePerson(t) && shiftsOverlap(t.title, title);
+    const openOverlap = [...labels.values()].find(overlaps);
+    const overlap = openOverlap ?? finished.find(overlaps);
+    if (overlap) {
+      const where = openOverlap
+        ? `the open task ${JSON.stringify(overlap.title)}`
+        : `${JSON.stringify(overlap.title)}, which the user already ticked off`;
+      return fail(
+        `it overlaps ${where} on that day, but with different times (the photo says ${JSON.stringify(title)}). ` +
+          "It was NOT added. Tell the user what's on their list and what the photo shows, and ask which is right. " +
+          (openOverlap
+            ? "If they say the photo is right, change the one on the list with fix_shift; don't add a second one."
+            : "Don't add a second one."),
+      );
     }
     const inReply = queue.some((c) => c.kind === "add" && c.shift && c.task.dueDate === date && sameShift(c.task.title, title));
     if (inReply) return fail("that shift is already queued in this reply. Don't queue it again.");

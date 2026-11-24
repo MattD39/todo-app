@@ -109,6 +109,28 @@ export function sameShift(a: string, b: string): boolean {
   return x.person === y.person || x.person === "" || y.person === "";
 }
 
+// When a shift title says it starts and ends, in minutes from midnight of its
+// own day: "Work 11 AM–6 PM" → 660 to 1080. An overnight shift ends after
+// 1440 ("Work 10 PM–6 AM (ends next day)" → 1320 to 1800). Null if the title
+// isn't a shift.
+export function shiftSpan(title: string): { start: number; end: number } | null {
+  const parts = shiftParts(title);
+  if (!parts) return null;
+  const [start, end] = [...parts.times.matchAll(/(\d{1,2})(?::(\d{2}))?([ap])m/g)].map(
+    (m) => ((Number(m[1]) % 12) + (m[3] === "p" ? 12 : 0)) * 60 + Number(m[2] ?? 0),
+  );
+  if (start === undefined || end === undefined) return null;
+  return { start, end: end <= start ? end + 1440 : end };
+}
+
+// Whether two shift titles' times overlap (touching, like 6–10 then 10–2,
+// doesn't count). Says nothing about the day or person: the caller checks those.
+export function shiftsOverlap(a: string, b: string): boolean {
+  const x = shiftSpan(a);
+  const y = shiftSpan(b);
+  return x !== null && y !== null && x.start < y.end && y.start < x.end;
+}
+
 // The name in front of a shift title, in small letters: "Elena work 9 AM–5 PM"
 // → "elena", "Work 9 AM–5 PM" → "" (no name). Null if it isn't a shift title.
 export function shiftPerson(title: string): string | null {

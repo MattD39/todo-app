@@ -204,8 +204,8 @@ check(
   ai.queueChange(mondayShift("Marcus"), onMonday("Elena work 9 AM–5 PM"), [], NOW.today).ok,
 );
 check(
-  "a different time on the same day is allowed",
-  ai.queueChange(mondayShift(null, "09:00", "13:00"), onMonday("Work 9 AM–5 PM"), [], NOW.today).ok,
+  "a different time on the same day that doesn't overlap is allowed (9–5, then 6–10 PM)",
+  ai.queueChange(mondayShift(null, "18:00", "22:00"), onMonday("Work 9 AM–5 PM"), [], NOW.today).ok,
 );
 check(
   "the same times on a different day are allowed",
@@ -233,6 +233,53 @@ check(
 check(
   "in one reply: Elena's shift, then Marcus's at the same time, are both queued",
   ai.queueChange(mondayShift("Marcus"), noTasks, queue, NOW.today).ok && queue.length === 2,
+);
+
+// Overlapping shifts (5c-3 test 6, user's decision): the same person (same
+// name, or no name on either) with a shift that day whose times overlap is
+// NOT added; Claude is told to ask which is right. No overlap = added.
+const onWed = (...titles: string[]) =>
+  new Map(titles.map((t, i) => [`T${i + 1}`, task(`w${i}`, t, { dueDate: "2026-11-25", dueTime: "11:00" })]));
+const wedShift = (start: string, end: string, person: string | null = null) =>
+  shiftCall("2026-11-25", "Wednesday", start, end, person);
+const overlapRefused = (r: { ok: boolean; message: string }) => !r.ok && /overlaps/.test(r.message) && /which is right/.test(r.message);
+const wedOverlap = ai.queueChange(wedShift("11:00", "19:00"), onWed("Work 11 AM–6 PM"), [], NOW.today);
+check(
+  "overlap: 11 AM–6 PM on the list, photo says 11 AM–7 PM: NOT added, Claude told to ask which is right",
+  overlapRefused(wedOverlap),
+  wedOverlap.message,
+);
+check(
+  "overlap: the same name (any capitals) with overlapping times is NOT added",
+  overlapRefused(ai.queueChange(wedShift("12:00", "20:00", "elena"), onWed("Elena work 11 AM–6 PM"), [], NOW.today)),
+);
+check(
+  "overlap: a ticked-off shift that overlaps also stops it",
+  overlapRefused(
+    ai.queueChange(wedShift("11:00", "19:00"), new Map(), [], NOW.today, [
+      task("f1", "Work 11 AM–6 PM", { dueDate: "2026-11-25", dueTime: "11:00", done: true }),
+    ]),
+  ),
+);
+check(
+  "overlap: an overnight shift on the list overlapping the photo's is NOT added",
+  overlapRefused(ai.queueChange(wedShift("23:00", "07:00"), onWed("Work 10 PM–6 AM (ends next day)"), [], NOW.today)),
+);
+check(
+  "no overlap: split shifts (6–10 AM on the list, 4–9 PM in the photo) are added",
+  ai.queueChange(wedShift("16:00", "21:00"), onWed("Work 6 AM–10 AM"), [], NOW.today).ok,
+);
+check(
+  "no overlap: back to back (6–10 AM, then 10 AM–2 PM) is added",
+  ai.queueChange(wedShift("10:00", "14:00"), onWed("Work 6 AM–10 AM"), [], NOW.today).ok,
+);
+check(
+  "no overlap check across people: Elena 11–6 on the list, Marcus 11–7 is added",
+  ai.queueChange(wedShift("11:00", "19:00", "Marcus"), onWed("Elena work 11 AM–6 PM"), [], NOW.today).ok,
+);
+check(
+  "exact same shift still says \"already on the list\" (not the overlap question)",
+  refusedAsOnList(ai.queueChange(wedShift("11:00", "18:00"), onWed("Work 11 AM–6 PM"), [], NOW.today)),
 );
 
 // Fixing a shift's time (5c-2b): the existing task changes; nothing is added.
@@ -290,6 +337,40 @@ const promiseCases: [string, boolean][] = [
 ];
 for (const [text, counts] of promiseCases) {
   check(`safety net ${counts ? "catches" : "ignores"}: ${JSON.stringify(text.split("\n")[0])}`, (ai.unkeptPromise(text) !== null) === counts);
+}
+
+// 5c-3: what's shown of the text Claude writes after the app answered its
+// changes. Only a promise repeating an earlier promise is dropped; questions
+// and everything else always show.
+const said = "I'll add the four shifts I can read: Monday, Wednesday, Friday and Sunday.";
+const laterCases: [string, string, string, boolean, string][] = [
+  // name, earlier text, later text, all changes queued?, expected shown text
+  ["drops a repeated promise", "I'll add Thursday, Nov 26, 7 AM–3 PM.", "I'll add the Thursday shift, Work 7 AM–3 PM on Nov 26.", true, ""],
+  ["drops a repeat with short day names", said, "I'll add the Mon, Wed, Fri and Sun shifts.", true, ""],
+  [
+    "promise repeated + Thursday question: the QUESTION still shows",
+    said,
+    "I'll add the Mon, Wed, Fri and Sun shifts. What time is your Thursday, Dec 3, shift?",
+    true,
+    "What time is your Thursday, Dec 3, shift?",
+  ],
+  [
+    'keeps an ask with no "?" ("If you tell me…")',
+    said,
+    "I'll add the Mon, Wed, Fri and Sun shifts. Once you tell me Thursday's time, I'll add that one too.",
+    true,
+    "Once you tell me Thursday's time, I'll add that one too.",
+  ],
+  ["keeps a promise about a different day", "I'll add Monday's shift.", "I'll add Thursday's shift too.", true, "I'll add Thursday's shift too."],
+  ["keeps a promise at a different time", "I'll add Monday, 9 AM–5 PM.", "I'll add Monday, 10 AM–5 PM.", true, "I'll add Monday, 10 AM–5 PM."],
+  ["keeps everything when a change was refused", "I'll add Friday.", "I'll add Friday. It was already on your list.", false, "I'll add Friday. It was already on your list."],
+  ["keeps everything when nothing was promised before", "Here's what I read:\n- Mon: 9 AM–5 PM", "I'll add Monday.", true, "I'll add Monday."],
+  ["keeps a repeated sentence that isn't a promise", said + " Thursday is hidden.", "Thursday is hidden.", true, "Thursday is hidden."],
+  ["keeps a note that isn't a promise", said, "Tuesday and Saturday are days off.", true, "Tuesday and Saturday are days off."],
+];
+for (const [name, earlier, later, allQueued, expected] of laterCases) {
+  const shownText = ai.laterRoundText(earlier, later, allQueued);
+  check(`after the app answers: ${name}`, shownText === expected, JSON.stringify(shownText));
 }
 
 queue = [];
@@ -375,6 +456,11 @@ async function ask(
     console.log(`  would add: ${c.summary}${c.kind === "add" && c.shift ? "" : "  (NOT a shift)"}`);
   if (queue.length === 0) console.log("  would add: nothing");
   console.log(`  cost: $${meter.costUsd.toFixed(4)} (${meter.inputTokens} tokens in, ${meter.outputTokens} out)`);
+  // 5c-3: a reply that makes changes says what it'll do once, not twice.
+  if (queue.length > 0) {
+    const promises = reply.split(/(?<=[.!?])\s+|\n+/).filter((s) => ai.unkeptPromise(s) !== null);
+    check("says what it'll do only once (no repeated sentence)", promises.length <= 1, promises.join(" | "));
+  }
   return { reply, queue, cost: meter.costUsd };
 }
 
@@ -388,6 +474,9 @@ const same = (q: ChatChange[], expected: string[]) =>
 const onlyShifts = (q: ChatChange[]) => q.every((c) => c.kind === "add" && c.shift === true);
 const user = (text: string, hadPhoto = false): ChatTurn => ({ role: "user", text, ...(hadPhoto ? { hadPhoto } : {}) });
 const assistant = (text: string): ChatTurn => ({ role: "assistant", text });
+// The sentences (or list lines) of a reply that match a pattern.
+const sentencesWith = (text: string, pattern: RegExp) =>
+  text.split(/(?<=[.!?])\s+|\n+/).filter((s) => pattern.test(s) && !s.trim().startsWith("-"));
 
 async function scenario(name: string, file: string) {
   const loaded = await loadPhoto(path.join(photosDir, file));
@@ -400,8 +489,13 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
 } else {
   console.log("\nPart 2: Claude reads the made-up schedules");
 
+  // 0 (5c-3). Normal chat, no photo: one change, said once.
+  console.log('\n0. Normal chat (no photo): "Add milk for Monday."');
+  let r = await ask([user("Add milk for Monday.")], null, [task("d1", "Call the dentist")]);
+  check("queues one new task", r.queue.length === 1 && r.queue[0].kind === "add", JSON.stringify(r.queue));
+
   // 1. A clear week with dates.
-  let photo = await scenario("1. A clear week with dates", "1-clear-week.png");
+  let photo =await scenario("1. A clear week with dates", "1-clear-week.png");
   const clearWeek = [
     "2026-11-23 09:00 Work 9 AM–5 PM",
     "2026-11-25 12:00 Work 12 PM–8 PM",
@@ -409,7 +503,7 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     "2026-11-27 09:00 Work 9 AM–5 PM",
     "2026-11-28 10:00 Work 10 AM–6:30 PM",
   ];
-  let r = await ask([user("Add these shifts please.")], photo);
+  r = await ask([user("Add these shifts please.")], photo);
   check("starts with a list of what it read", /here's what i read/i.test(r.reply));
   check(
     "adds exactly the 5 shifts, right dates and times",
@@ -549,7 +643,11 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     "2026-12-06 09:00 Work 9 AM–1 PM",
   ];
   check("adds the 4 clear shifts straight away", same(r.queue, riley), JSON.stringify(shiftsOf(r.queue)));
-  check("asks about Thursday", /thu/i.test(r.reply) && /\?|tell me/i.test(r.reply), r.reply);
+  check(
+    "asks about Thursday (the question still shows after the shifts are added)",
+    /thu/i.test(r.reply) && /\?|tell me/i.test(r.reply),
+    r.reply,
+  );
   console.log('\n6b. Follow-up (no photo): "Thursday is 10 to 6."');
   const rileySaved = saved([
     ["2026-11-30", "08:00", "16:00"],
@@ -567,6 +665,39 @@ if (process.env.ANTHROPIC_API_KEY === undefined) {
     [task("m1", "Buy milk"), ...rileySaved.tasks],
   );
   check("adds only Thursday, 10 AM–6 PM", same(r6.queue, ["2026-12-03 10:00 Work 10 AM–6 PM"]), JSON.stringify(shiftsOf(r6.queue)));
+
+  // 6c (5c-3 test 6). The same photo again, with the list as it was in the
+  // user's test: Wednesday fixed to 11 AM–6 PM, Thursday added as 10 AM–6 PM.
+  console.log("\n6c. Same photo again: Wednesday on the list as 11 AM–6 PM, Thursday already 10 AM–6 PM");
+  photo = await scenario("6c. Same photo again: Wednesday on the list as 11 AM–6 PM, Thursday already 10 AM–6 PM", "6-coffee-stain.png");
+  const rileyList = [
+    task("m1", "Buy milk"),
+    task("r1", "Work 8 AM–4 PM", { dueDate: "2026-11-30", dueTime: "08:00" }),
+    task("r2", "Work 11 AM–6 PM", { dueDate: "2026-12-02", dueTime: "11:00" }),
+    task("r3", "Work 10 AM–6 PM", { dueDate: "2026-12-03", dueTime: "10:00" }),
+    task("r4", "Work 8 AM–4 PM", { dueDate: "2026-12-04", dueTime: "08:00" }),
+    task("r5", "Work 9 AM–1 PM", { dueDate: "2026-12-06", dueTime: "09:00" }),
+  ];
+  r = await ask([user("Add these shifts please.")], photo, rileyList);
+  check("adds nothing (no second Wednesday shift)", r.queue.length === 0, JSON.stringify(shiftsOf(r.queue)));
+  check(
+    "asks which Wednesday time is right (list 6 PM vs photo 7 PM)",
+    /wed/i.test(r.reply) && /6\s*PM/i.test(r.reply) && /7\s*PM/i.test(r.reply) && /\?|tell me|let me know/i.test(r.reply),
+    r.reply,
+  );
+  const asksThursday = sentencesWith(r.reply, /thu/i).some((s) => /\?|tell me|let me know|what time/i.test(s));
+  check("doesn't ask for Thursday's time (Thursday is already on the list)", !asksThursday, r.reply);
+  console.log('\n6d. Follow-up (no photo): "The photo is right, it ends at 7."');
+  const r6d = await ask(
+    [user("Add these shifts please.", true), assistant(r.reply), user("The photo is right, it ends at 7.")],
+    null,
+    rileyList,
+  );
+  check(
+    "changes the Wednesday shift on the list to 11 AM–7 PM, adds nothing",
+    JSON.stringify(fixes(r6d.queue)) === JSON.stringify(["r2 Work 11 AM–7 PM (time unchanged)"]),
+    JSON.stringify(fixes(r6d.queue)),
+  );
 
   // 7 (5c-2a). The user's own one-person schedule, while someone else's shift
   // ("Elena work 9 AM–5 PM") is on the list at Monday's time. Adds the others
