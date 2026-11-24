@@ -613,3 +613,16 @@ Short entries, added as each new step is finished and committed.
     below, each with a Save button.
   - **Testing:** 13 tests in the app (the server side was covered by part 1's
     free check, which still passes).
+
+- **Nov 24 — Saved categories, part 3: the task sheet and chips.** The task
+  sheet's Category box now opens a list of only my saved categories, with
+  "+ Add category…" at the bottom (saves a new one and picks it). I can still
+  type anything: a typed name that isn't saved is just for that task, with a
+  "Save to list" link beside it. The four built-in suggestions are gone.
+  - **Chips:** a saved category keeps its chip while any task has it; a
+    one-off only while an unfinished task has it, so "Birthday party" goes
+    away once the party's tasks are done.
+  - **Phone-friendly:** the list opens inside the sheet, pushing the fields
+    below down, so the keyboard can't hide it; Esc closes just the list.
+  - **Testing:** 5 new free checks (25 in all, passed 3 times), the other
+    free checks, and 17 tests in the app.

@@ -260,17 +260,33 @@ export async function getTask(id: string): Promise<TaskDTO | null> {
   return row ? toDTO(row) : null;
 }
 
-// The user's categories that are on at least one task, A–Z. Used for the
-// suggestions list and filter chips. (Categories whose tasks were all deleted
-// stay in the database, and get reused if you type the name again.)
+// The categories that get a filter chip, A–Z: a saved category while any task
+// has it (finished ones included), and a one-off only while an unfinished
+// task has it, so its chip goes once they're all finished or deleted (the
+// user's rule). (Categories with no tasks stay in the database, and get
+// reused if you type the name again.)
 export async function listCategories(): Promise<CategoryDTO[]> {
   return asCurrentUser((tx, userId) =>
     tx.category.findMany({
-      where: { userId, tasks: { some: {} } },
+      where: {
+        userId,
+        OR: [
+          { saved: true, tasks: { some: {} } },
+          { saved: false, tasks: { some: { done: false } } },
+        ],
+      },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
   );
+}
+
+// The saved list's names, A–Z, for the task sheet's Category list.
+export async function listSavedCategoryNames(): Promise<string[]> {
+  const rows = await asCurrentUser((tx, userId) =>
+    tx.category.findMany({ where: { userId, saved: true }, select: { name: true }, orderBy: { name: "asc" } }),
+  );
+  return rows.map((r) => r.name);
 }
 
 // ─── Saved categories ("like contacts") ──────────────────────────────────────

@@ -12,7 +12,9 @@
 //   - add / save a one-off / rename / delete, with their safety rules;
 //   - the saved list and the one-offs in use, with task counts;
 //   - typing a saved name in any capitals uses the saved one;
-//   - another person's categories are never seen or changed.
+//   - another person's categories are never seen or changed;
+//   - the chip rule (g3): saved = while any task has it, one-off = only while
+//     an unfinished task has it; the task sheet lists only saved ones.
 // Only the made-up people's rows are created and deleted; your own data is
 // never touched or shown. Exits with an error if any check fails.
 
@@ -211,6 +213,36 @@ try {
       (await errorOf(() => asTestUser(() => tasks.categoryUsage(theirs)))) !== null &&
       (await categoryOf(OTHER_USER, "Their category")).length === 1,
   );
+  // ── Chips and the task sheet's list (g3) ──
+  console.log("\nChips and the task sheet's list\n");
+  await cleanUp();
+  const savedDone = await addCategory(TEST_USER, "Saved finished only", true);
+  await addTask(TEST_USER, "Done thing", savedDone, true);
+  await addCategory(TEST_USER, "Saved unused", true);
+  const oneOffOpen = await addCategory(TEST_USER, "One-off open", false);
+  await addTask(TEST_USER, "Open thing", oneOffOpen);
+  const oneOffDone = await addCategory(TEST_USER, "One-off finished only", false);
+  await addTask(TEST_USER, "Finished thing", oneOffDone, true);
+  const chips = (await asTestUser(() => tasks.listCategories())).map((c) => c.name);
+  check(
+    "chips: a saved category with only finished tasks keeps its chip; a one-off with an unfinished task has one",
+    JSON.stringify(chips) === JSON.stringify(["One-off open", "Saved finished only"]),
+    JSON.stringify(chips),
+  );
+  check("…a one-off whose tasks are all finished has no chip", !chips.includes("One-off finished only"));
+  check("…a saved category no task uses has no chip", !chips.includes("Saved unused"));
+  const names = await asTestUser(() => tasks.listSavedCategoryNames());
+  check(
+    "the task sheet's list: only saved categories, A to Z (used or not)",
+    JSON.stringify(names) === JSON.stringify(["Saved finished only", "Saved unused"]),
+    JSON.stringify(names),
+  );
+  await owner.query(`UPDATE "Task" SET done = true WHERE title = 'Open thing' AND "userId" = $1`, [TEST_USER]);
+  check(
+    "finishing a one-off's last unfinished task removes its chip",
+    !(await asTestUser(() => tasks.listCategories())).some((c) => c.name === "One-off open"),
+  );
+
   check(
     "a signed-out visitor can't add, rename or delete",
     (await errorOf(() => tasks.saveCategory("Sneaky"))) !== null &&

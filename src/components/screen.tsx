@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { formatDay, nowIn } from "@/lib/dates";
-import { listCategories, listOpenTasks } from "@/lib/tasks";
+import { listCategories, listOpenTasks, listSavedCategoryNames } from "@/lib/tasks";
 import { getTimeZone } from "@/lib/timezone";
 import { buildStats, defaultCategory, pickedCategories, setCategoryParams } from "@/lib/views";
 import { TimeZoneSync } from "@/app/timezone-sync";
@@ -68,11 +68,16 @@ export type SearchParams = Promise<Record<string, string | string[] | undefined>
 // across tabs. None on = "All".
 export async function loadScreen(searchParams: SearchParams) {
   const [user, timeZone, params] = await Promise.all([getCurrentUser(), getTimeZone(), searchParams]);
-  const [open, categoryRows] = await Promise.all([listOpenTasks(), listCategories()]);
+  const [open, categoryRows, savedCategories] = await Promise.all([
+    listOpenTasks(),
+    listCategories(),
+    listSavedCategoryNames(),
+  ]);
   const categories = categoryRows.map((c) => c.name);
   // Unknown names (e.g. a category whose last task was deleted) are left out.
   const picked = pickedCategories(params.cat, categories);
-  return { user, timeZone, now: nowIn(timeZone), open, categories, picked };
+  // categories: the chips; savedCategories: the task sheet's Category list.
+  return { user, timeZone, now: nowIn(timeZone), open, categories, savedCategories, picked };
 }
 
 export type ScreenData = Awaited<ReturnType<typeof loadScreen>>;
@@ -91,7 +96,7 @@ function ScreenFrame({ tab, data, children }: { tab: Tab; data: ScreenData; chil
   const chips = <CategoryChips categories={data.categories} picked={data.picked} />;
   return (
     <TaskEditorProvider
-      categories={data.categories}
+      savedCategories={data.savedCategories}
       defaultCategory={defaultCategory(data.picked)}
       today={data.now.today}
       showAddButton={tab !== "chat"} // it would sit on top of the chat's Send button

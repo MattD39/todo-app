@@ -22,6 +22,7 @@ import { useBackdropClose } from "./use-backdrop-close";
 import { useFitVisibleScreen } from "./use-fit-visible-screen";
 import { useSwipeToClose } from "./use-swipe-to-close";
 import { useEditMode } from "./edit-mode";
+import { CategoryField } from "./category-field";
 
 // Everything for adding and editing tasks:
 //   • TaskEditorProvider — wraps a screen; owns "is the editor open, and for which task?"
@@ -46,18 +47,15 @@ export function useToast() {
   return use(ShowToast);
 }
 
-// Suggested in the Category box until you've made your own.
-const STARTER_CATEGORIES = ["Personal", "Fitness", "Business", "Errands"];
-
 export function TaskEditorProvider({
-  categories,
+  savedCategories,
   defaultCategory,
   today,
   showAddButton = true,
   enterToAdd = false,
   children,
 }: {
-  categories: string[];
+  savedCategories: string[]; // the saved list, offered in the Category box
   defaultCategory: string | null; // the filter chip that's on, if any — new tasks start in it
   today: string; // in the user's time zone
   showAddButton?: boolean; // the floating "Add task" button (off on the Chat tab, where it would cover Send)
@@ -88,8 +86,6 @@ export function TaskEditorProvider({
     toastTimer.current = setTimeout(() => setCurrentToast(null), action ? 6000 : 2600);
   }, []);
 
-  const suggestions = [...new Set([...categories, ...STARTER_CATEGORIES])];
-
   return (
     <OpenEditor value={open}>
       <ShowToast value={toast}>
@@ -102,7 +98,7 @@ export function TaskEditorProvider({
           <TaskSheet
             key={openCount}
             editing={editing}
-            suggestions={suggestions}
+            savedCategories={savedCategories}
             defaultCategory={defaultCategory}
             onClose={close}
           />
@@ -259,12 +255,12 @@ const REPEAT_OPTIONS = [
 
 function TaskSheet({
   editing,
-  suggestions,
+  savedCategories,
   defaultCategory,
   onClose,
 }: {
   editing: Editing;
-  suggestions: string[];
+  savedCategories: string[];
   defaultCategory: string | null;
   onClose: () => void;
 }) {
@@ -419,24 +415,12 @@ function TaskSheet({
             />
           </label>
 
-          <label className={fieldLabel}>
-            Category
-            <input
-              name="category"
-              list="category-suggestions"
-              maxLength={40}
-              defaultValue={task ? task.category?.name : (defaultCategory ?? undefined)}
-              placeholder="Personal"
-              autoComplete="off"
-              enterKeyHint="done"
-              className={input}
-            />
-            <datalist id="category-suggestions">
-              {suggestions.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          </label>
+          <CategoryField
+            saved={savedCategories}
+            initial={task ? (task.category?.name ?? "") : (defaultCategory ?? "")}
+            labelClassName={fieldLabel}
+            inputClassName={input}
+          />
 
           <fieldset className={fieldLabel}>
             <legend className="mb-[5px]">Priority</legend>
