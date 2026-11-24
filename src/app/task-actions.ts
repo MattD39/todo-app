@@ -6,6 +6,12 @@ import { relDay } from "@/lib/dates";
 import {
   addStep,
   addSteps,
+  categoryUsage,
+  deleteSavedCategory,
+  listOneOffCategories,
+  listSavedCategories,
+  renameCategory,
+  saveCategory,
   createTask,
   deleteStep,
   deleteFromBin,
@@ -29,6 +35,7 @@ import {
   type BatchRestoreResult,
   type BinItem,
   type RestoreResult,
+  type SavedCategory,
   type DeletedTask,
   type DeletedTick,
   type NewTaskInput,
@@ -172,6 +179,52 @@ export async function undoSwipeDelete(copy: unknown): Promise<ActionResult> {
   if (task) return run("undo", () => restoreDeletedTask(task));
   if (tick) return run("undo", () => restoreDeletedTick(tick));
   return { error: "That can't be undone." };
+}
+
+// ─── Categories (Settings) ───────────────────────────────────────────────────
+
+export type CategoriesList = { saved: SavedCategory[]; oneOffs: { id: string; name: string; tasks: number }[] };
+
+// The saved list and the one-offs in use, for Settings → Categories. Only
+// reads, so the page isn't refreshed.
+export async function getCategories(): Promise<{ error: string | null; value?: CategoriesList }> {
+  try {
+    const [saved, oneOffs] = await Promise.all([listSavedCategories(), listOneOffCategories()]);
+    return { error: null, value: { saved, oneOffs } };
+  } catch (error) {
+    unstable_rethrow(error);
+    console.error("Listing categories failed", error);
+    return { error: "Couldn't load your categories. Check your connection and try again." };
+  }
+}
+
+// Add a category to the saved list, or save a one-off (same thing: by name).
+export async function addCategory(name: unknown): Promise<ActionResult & { value?: { name: string; alreadySaved: boolean } }> {
+  return run("save the category", () => saveCategory(name));
+}
+
+export async function renameSavedCategory(id: unknown, name: unknown): Promise<ActionResult & { value?: string }> {
+  return run("rename the category", () => renameCategory(id, name));
+}
+
+// How many tasks would lose it, for the "Delete Work?" box. Only reads.
+export async function getCategoryUsage(
+  id: unknown,
+): Promise<{ error: string | null; value?: { name: string; tasks: number; finished: number } }> {
+  try {
+    return { error: null, value: await categoryUsage(id) };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof TaskError) return { error: error.message };
+    console.error("Counting a category's tasks failed", error);
+    return { error: "Couldn't check that category. Check your connection and try again." };
+  }
+}
+
+// Deleting is only possible here, in Settings. Its tasks keep going with no
+// category. The result is how many tasks lost it.
+export async function deleteCategory(id: unknown): Promise<ActionResult & { value?: number }> {
+  return run("delete the category", () => deleteSavedCategory(id));
 }
 
 // ─── Recently deleted (Settings) ─────────────────────────────────────────────

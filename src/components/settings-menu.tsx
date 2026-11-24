@@ -6,12 +6,13 @@ import { signOut, signOutEverywhere } from "@/app/login/actions";
 import { clearSavedChat } from "./chat-store";
 import { ConfirmDialog } from "./confirm-dialog";
 import { RecentlyDeletedRow, RecentlyDeletedScreen, useRecentlyDeleted, type ConfirmRequest } from "./recently-deleted";
+import { CategoriesRow, CategoriesScreen, useCategories } from "./categories-settings";
 import { useBackdropClose } from "./use-backdrop-close";
 import { useSwipeToClose } from "./use-swipe-to-close";
 
 // The gear button in each screen's header, and the settings sheet it opens.
-// The sheet holds your account (Sign out, Sign out of all devices) and
-// Recently deleted.
+// The sheet holds your account (Sign out, Sign out of all devices),
+// Categories and Recently deleted.
 export function SettingsButton({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -42,26 +43,39 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
   const [confirming, setConfirming] = useState<"this" | "all" | null>(null);
   const [signingOutAll, startSignOutAll] = useTransition();
   const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
-  // An "are you sure?" asked by Recently deleted (Delete forever, Empty bin).
+  // An "are you sure?" asked by Recently deleted (Delete forever, Empty bin)
+  // or by Categories (Delete a category).
   const [binConfirm, setBinConfirm] = useState<ConfirmRequest | null>(null);
   const bin = useRecentlyDeleted(setBinConfirm);
-  // Which screen the sheet shows: Settings, or the Recently deleted list.
-  // `cameBack`: returned from the list, so focus goes back to its row.
-  const [view, setView] = useState<"settings" | "bin">("settings");
-  const [cameBack, setCameBack] = useState(false);
+  const categories = useCategories(setBinConfirm);
+  // Which screen the sheet shows: Settings, Categories or Recently deleted.
+  // `cameBackFrom`: returned from one, so focus goes back to its row.
+  const [view, setView] = useState<"settings" | "bin" | "categories">("settings");
+  const [cameBackFrom, setCameBackFrom] = useState<"bin" | "categories" | null>(null);
   const backdropClose = useBackdropClose(onClose);
-  // Swipe down to close (iPhone), on either screen. On Settings the panel
-  // scrolls; on Recently deleted only the list in the middle does.
+  // Swipe down to close (iPhone), on any screen. On Settings the panel
+  // scrolls; on the other two only the part in the middle does.
   const panelRef = useRef<HTMLDivElement>(null);
   const binScrollRef = useRef<HTMLDivElement>(null);
-  useSwipeToClose(panelRef, view === "bin" ? binScrollRef : panelRef, onClose, view);
+  const categoriesScrollRef = useRef<HTMLDivElement>(null);
+  useSwipeToClose(
+    panelRef,
+    view === "bin" ? binScrollRef : view === "categories" ? categoriesScrollRef : panelRef,
+    onClose,
+    view,
+  );
 
   function openBin() {
     bin.clearNote();
     setView("bin");
   }
+  function openCategories() {
+    categories.clearNote();
+    categories.stopRenaming();
+    setView("categories");
+  }
   function backToSettings() {
-    setCameBack(true);
+    setCameBackFrom(view === "settings" ? null : view);
     setView("settings");
   }
 
@@ -75,9 +89,9 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
         ref={dialogRef}
         aria-labelledby="settings-title"
         onClose={onClose}
-        // Escape on the Recently deleted list goes back to Settings first.
+        // Escape on Recently deleted or Categories goes back to Settings first.
         onCancel={(e) => {
-          if (view === "bin") {
+          if (view !== "settings") {
             e.preventDefault();
             backToSettings();
           }
@@ -94,6 +108,14 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
             className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink"
           >
             <RecentlyDeletedScreen bin={bin} onBack={backToSettings} scrollRef={binScrollRef} />
+          </div>
+        ) : view === "categories" ? (
+          // Same shape: header at the top, the rest scrolls.
+          <div
+            ref={panelRef}
+            className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink"
+          >
+            <CategoriesScreen categories={categories} onBack={backToSettings} scrollRef={categoriesScrollRef} />
           </div>
         ) : (
           <div
@@ -143,7 +165,8 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
               )}
             </section>
 
-            <RecentlyDeletedRow bin={bin} onOpen={openBin} focusOnMount={cameBack} />
+            <CategoriesRow categories={categories} onOpen={openCategories} focusOnMount={cameBackFrom === "categories"} />
+            <RecentlyDeletedRow bin={bin} onOpen={openBin} focusOnMount={cameBackFrom === "bin"} />
           </div>
         )}
       </dialog>

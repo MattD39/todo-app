@@ -602,3 +602,14 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** a new free check (`npm run check:saved-categories`, 20
     checks, including a fake new account that's always undone), the database
     privacy tests, the other free checks, and 8 tests in the app.
+
+- **Nov 24 — Saved categories, part 2: Settings → Categories.** A new screen
+  in Settings for my saved categories: add one, rename one (a name another
+  category already has is refused; changing only the capitals is fine), or
+  delete one. Deleting is only possible here, after a box that says how many
+  tasks will lose the category, e.g. "Delete Work? 12 tasks will lose this
+  category (3 of them finished)." The tasks stay, with no category.
+  - **"Not saved":** one-off categories that unfinished tasks use are listed
+    below, each with a Save button.
+  - **Testing:** 13 tests in the app (the server side was covered by part 1's
+    free check, which still passes).
