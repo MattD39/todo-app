@@ -524,3 +524,17 @@ Short entries, added as each new step is finished and committed.
     would waste space on the real phone, so I turned the badge off (Next.js
     still shows errors without it).
   - **Testing:** 16 tests in the app.
+
+- **Nov 24 — Select several tasks, part d: Undo.** After deleting several
+  tasks in edit mode, "Deleted 3 tasks · Undo" shows for 6 seconds, like swipe
+  to delete, and Undo brings the whole batch back: tasks with their notes,
+  steps, category, repeat and history, and single "Finished today" entries.
+  - **Odd cases are reported, not hidden:** "Restored 1 (1 was already back)"
+    if one was restored from Settings meanwhile, "(1 couldn't come back)" if
+    one was deleted forever; the rest still come back.
+  - **How:** Undo restores everything in one go from Recently deleted, with
+    the same fixed number of database steps for 2 tasks or 200 (200 took half
+    a second). Single restore and batch Undo now share the same code for
+    checking a saved copy, so both are equally careful.
+  - **Testing:** 11 new free checks (31 in all, passed 3 times), the database
+    privacy tests, and tests in the app including the "already back" case.

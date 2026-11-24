@@ -647,55 +647,180 @@ export async function restoreDeletedTask(input: unknown): Promise<void> {
 // Puts a task back from a copy (from swipe Undo, or Restore in Recently
 // deleted) and takes it out of the bin. Returns its title.
 async function restoreCopy(tx: Db, userId: string, input: unknown): Promise<string> {
-  const copy = asObject(input);
-  const id = copy.id;
-  if (!isUuid(id)) throw new TaskError("That can't be undone.");
-  const title = cleanTitle(copy.title);
-  const notes = cleanNotes(copy.notes);
-  const priority = cleanPriority(copy.priority) ?? "medium";
-  const dueDate = cleanDate(copy.dueDate);
-  const dueTime = dueDate ? cleanTime(copy.dueTime) : null;
-  const repeat = cleanRepeat(copy.repeat);
-  const done = copy.done === true;
-  const doneAt = done ? cleanMoment(copy.doneAt) : null;
-  const createdAt = cleanMoment(copy.createdAt) ?? new Date();
-  const steps = Array.isArray(copy.steps) ? copy.steps.map(asObject) : [];
-  if (steps.length > MAX_STEPS) throw new TaskError("That can't be undone.");
-  const ticks = Array.isArray(copy.ticks) ? copy.ticks.map(asObject) : [];
-  if (ticks.length > 5000) throw new TaskError("That can't be undone.");
-
-  if (await tx.task.findFirst({ where: { id }, select: { id: true } })) {
+  const { task, category, steps, ticks } = cleanCopy(input);
+  if (await tx.task.findFirst({ where: { id: task.id }, select: { id: true } })) {
     throw new TaskError("It's already back.");
   }
   await tx.task.create({
     data: {
-      id,
+      ...task,
       userId,
-      title,
-      notes,
-      priority,
-      dueDate: dueDate ? dateToDb(dueDate) : null,
-      dueTime,
-      repeat,
-      done,
-      doneAt,
-      createdAt,
-      categoryId: await categoryIdFor(tx, userId, typeof copy.category === "string" ? copy.category : null),
-      subtasks: {
-        create: steps.map((s, i) => ({
-          ...(isUuid(s.id) ? { id: s.id } : {}),
-          title: cleanStepTitle(s.title),
-          done: s.done === true,
-          position: Number.isInteger(s.position) ? (s.position as number) : i,
-          createdAt: cleanMoment(s.createdAt) ?? new Date(),
-        })),
-      },
-      completions: { create: ticks.map(cleanTickFields) },
+      categoryId: await categoryIdFor(tx, userId, category),
+      subtasks: { create: steps },
+      completions: { create: ticks },
     },
   });
   // It's back, so it's no longer in Recently deleted.
-  await tx.recentlyDeleted.deleteMany({ where: { id, userId } });
-  return title;
+  await tx.recentlyDeleted.deleteMany({ where: { id: task.id, userId } });
+  return task.title;
+}
+
+// A deleted task's copy, every field checked, ready to save again. (A copy
+// can come back from the browser, so it's treated like any other input.)
+// Throws "That can't be undone." if it isn't a usable copy.
+function cleanCopy(input: unknown) {
+  const copy = asObject(input);
+  const id = copy.id;
+  if (!isUuid(id)) throw new TaskError("That can't be undone.");
+  const dueDate = cleanDate(copy.dueDate);
+  const done = copy.done === true;
+  const steps = Array.isArray(copy.steps) ? copy.steps.map(asObject) : [];
+  if (steps.length > MAX_STEPS) throw new TaskError("That can't be undone.");
+  const ticks = Array.isArray(copy.ticks) ? copy.ticks.map(asObject) : [];
+  if (ticks.length > 5000) throw new TaskError("That can't be undone.");
+  return {
+    task: {
+      id,
+      title: cleanTitle(copy.title),
+      notes: cleanNotes(copy.notes),
+      priority: cleanPriority(copy.priority) ?? "medium",
+      dueDate: dueDate ? dateToDb(dueDate) : null,
+      dueTime: dueDate ? cleanTime(copy.dueTime) : null,
+      repeat: cleanRepeat(copy.repeat),
+      done,
+      doneAt: done ? cleanMoment(copy.doneAt) : null,
+      createdAt: cleanMoment(copy.createdAt) ?? new Date(),
+    },
+    category: typeof copy.category === "string" ? copy.category : null,
+    steps: steps.map((s, i) => ({
+      ...(isUuid(s.id) ? { id: s.id } : {}),
+      title: cleanStepTitle(s.title),
+      done: s.done === true,
+      position: Number.isInteger(s.position) ? (s.position as number) : i,
+      createdAt: cleanMoment(s.createdAt) ?? new Date(),
+    })),
+    ticks: ticks.map(cleanTickFields),
+  };
+}
+
+// What Undo after a batch delete did.
+export type BatchRestoreResult = {
+  restored: number; // tasks and entries put back
+  alreadyBack: number; // already restored some other way (e.g. from Settings)
+  failed: number; // couldn't come back (e.g. deleted forever from Settings meanwhile)
+};
+
+// Undo for a batch delete (deleteManyWithCopies): puts the whole tasks back
+// from Recently deleted, and the single entries from their copies. All in one
+// transaction, with a fixed number of queries however many there are (so 200
+// are as quick as 2). Rows already back are skipped and counted; the rest
+// still come back. `input` comes from the browser ({ taskIds, ticks }), so
+// everything is checked here, and only this user's own copies can be used.
+export async function restoreBatch(input: unknown): Promise<BatchRestoreResult> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  const { taskIds, ticks } = asObject(input);
+  if (!Array.isArray(taskIds) || !Array.isArray(ticks)) throw new TaskError("That can't be undone.");
+  if (taskIds.length + ticks.length === 0) throw new TaskError("That can't be undone.");
+  if (taskIds.length > MAX_BATCH_DELETE || ticks.length > MAX_BATCH_DELETE) {
+    throw new TaskError("That can't be undone.");
+  }
+  const ids = [...new Set(taskIds.filter(isUuid))];
+  if (ids.length !== new Set(taskIds).size) throw new TaskError("That can't be undone.");
+
+  return asCurrentUser(async (tx, userId) => {
+    let restored = 0;
+    let alreadyBack = 0;
+    let failed = 0;
+
+    // ── Whole tasks, from Recently deleted ──
+    const binRows = await tx.recentlyDeleted.findMany({
+      where: { id: { in: ids }, userId, deletedAt: { gte: binCutoff() } },
+      select: { id: true, copy: true },
+    });
+    const existing = new Set(
+      (await tx.task.findMany({ where: { id: { in: ids }, userId }, select: { id: true } })).map((t) => t.id),
+    );
+    const inBin = new Set(binRows.map((r) => r.id));
+    for (const id of ids) {
+      if (existing.has(id)) alreadyBack++; // e.g. restored from Settings meanwhile
+      else if (!inBin.has(id)) failed++; // e.g. deleted forever from Settings meanwhile
+    }
+    const copies: ReturnType<typeof cleanCopy>[] = [];
+    for (const row of binRows) {
+      if (existing.has(row.id)) continue;
+      try {
+        copies.push(cleanCopy(row.copy));
+      } catch {
+        failed++;
+      }
+    }
+
+    if (copies.length > 0) {
+      // Categories by name, reusing existing ones whatever their capitals.
+      const known = async () => tx.category.findMany({ where: { userId }, select: { id: true, name: true } });
+      let categories = await known();
+      const idFor = (name: string) => categories.find((c) => c.name.toLowerCase() === name.toLowerCase())?.id;
+      const names = [
+        ...new Set(copies.map((c) => c.category?.trim().replace(/\s+/g, " ")).filter((n): n is string => !!n)),
+      ].filter((n) => n.length <= MAX_CATEGORY);
+      const missing = names.filter((n) => !idFor(n));
+      if (missing.length > 0) {
+        await tx.category.createMany({ data: missing.map((name) => ({ userId, name })), skipDuplicates: true });
+        categories = await known();
+      }
+      const categoryOf = (c: ReturnType<typeof cleanCopy>) => {
+        const name = c.category?.trim().replace(/\s+/g, " ");
+        return name ? (idFor(name) ?? null) : null;
+      };
+
+      await tx.task.createMany({ data: copies.map((c) => ({ ...c.task, userId, categoryId: categoryOf(c) })) });
+      await tx.subtask.createMany({ data: copies.flatMap((c) => c.steps.map((s) => ({ ...s, taskId: c.task.id }))) });
+      await tx.taskCompletion.createMany({
+        data: copies.flatMap((c) => c.ticks.map((t) => ({ ...t, taskId: c.task.id }))),
+      });
+      // They're back, so they're no longer in Recently deleted.
+      await tx.recentlyDeleted.deleteMany({ where: { id: { in: copies.map((c) => c.task.id) }, userId } });
+      restored += copies.length;
+    }
+
+    // ── Single entries ("Finished today"), from their copies ──
+    const tickCopies: (ReturnType<typeof cleanTickFields> & { taskId: string })[] = [];
+    for (const raw of ticks) {
+      const value = asObject(raw);
+      try {
+        const fields = cleanTickFields(value);
+        if (!fields.id || !isUuid(value.taskId)) throw new TaskError("That can't be undone.");
+        tickCopies.push({ ...fields, taskId: value.taskId });
+      } catch {
+        failed++;
+      }
+    }
+    if (tickCopies.length > 0) {
+      const ownTasks = new Set(
+        (
+          await tx.task.findMany({
+            where: { id: { in: [...new Set(tickCopies.map((t) => t.taskId))] }, userId },
+            select: { id: true },
+          })
+        ).map((t) => t.id),
+      );
+      const backAlready = new Set(
+        (
+          await tx.taskCompletion.findMany({
+            where: { id: { in: tickCopies.map((t) => t.id!) }, task: { userId } },
+            select: { id: true },
+          })
+        ).map((t) => t.id),
+      );
+      const toCreate = tickCopies.filter((t) => ownTasks.has(t.taskId) && !backAlready.has(t.id!));
+      alreadyBack += tickCopies.filter((t) => backAlready.has(t.id!)).length;
+      failed += tickCopies.filter((t) => !ownTasks.has(t.taskId) && !backAlready.has(t.id!)).length;
+      if (toCreate.length > 0) await tx.taskCompletion.createMany({ data: toCreate, skipDuplicates: true });
+      restored += toCreate.length;
+    }
+
+    return { restored, alreadyBack, failed };
+  });
 }
 
 // Deletes one tick of a repeating task (one history entry). The task itself

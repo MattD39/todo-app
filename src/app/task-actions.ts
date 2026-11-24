@@ -15,6 +15,7 @@ import {
   emptyBin,
   listRecentlyDeleted,
   restoreAllFromBin,
+  restoreBatch,
   restoreFromBin,
   restoreDeletedTask,
   restoreDeletedTick,
@@ -24,6 +25,7 @@ import {
   undoCompletion,
   updateTask,
   type BatchDeleteResult,
+  type BatchRestoreResult,
   type BinItem,
   type DeletedTask,
   type DeletedTick,
@@ -154,6 +156,12 @@ export async function swipeDelete(
 // The result says how many were deleted or already gone.
 export async function deleteSelected(targets: unknown): Promise<ActionResult & { value?: BatchDeleteResult }> {
   return run("delete", () => deleteManyWithCopies(targets));
+}
+
+// Undo for deleteSelected: puts the tasks back from Recently deleted and the
+// single entries from their copies (all checked again in tasks.ts).
+export async function undoDeleteSelected(deleted: unknown): Promise<ActionResult & { value?: BatchRestoreResult }> {
+  return run("undo", () => restoreBatch(deleted));
 }
 
 // Undo for swipe to delete: puts the copy back (checked again in tasks.ts).

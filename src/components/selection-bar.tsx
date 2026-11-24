@@ -1,15 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { deleteSelected } from "@/app/task-actions";
+import { deleteSelected, undoDeleteSelected } from "@/app/task-actions";
+import type { BatchRestoreResult } from "@/lib/tasks";
 import { useEditMode } from "./edit-mode";
 import { useToast } from "./task-editor";
 
 // The bar at the bottom in edit mode: Cancel · Select all · Delete (N). It
 // covers the tab bar while you're selecting, so you can't leave the screen
 // half-way through. Delete removes everything selected at once; each whole
-// task goes into Recently deleted (Settings), the same as swipe to delete.
-// (Undo after a batch delete comes next, in step c.)
+// task goes into Recently deleted (Settings), the same as swipe to delete,
+// and "Deleted 3 tasks · Undo" brings the whole batch back.
 export function SelectionBar() {
   const edit = useEditMode();
   const toast = useToast();
@@ -32,7 +33,20 @@ export function SelectionBar() {
       return;
     }
     edit.stop();
-    toast(deletedMessage(result.value));
+    const { taskIds, ticks } = result.value;
+    if (taskIds.length + ticks.length === 0) {
+      toast(deletedMessage(result.value)); // nothing was deleted, so nothing to undo
+      return;
+    }
+    // Undo, like swipe to delete: everything from this batch comes back. (After
+    // the message goes, each task can still be restored from Recently deleted.)
+    toast(deletedMessage(result.value), {
+      label: "Undo",
+      onClick: async () => {
+        const undo = await undoDeleteSelected({ taskIds, ticks });
+        toast(undo.error ?? restoredMessage(undo.value!));
+      },
+    });
   }
 
   const button = "h-11 rounded-full px-4 font-bold disabled:opacity-40";
@@ -63,6 +77,15 @@ export function SelectionBar() {
       </button>
     </div>
   );
+}
+
+// "Restored 3", "Restored 4 (1 was already back)", "… (1 couldn't come back)".
+function restoredMessage({ restored, alreadyBack, failed }: BatchRestoreResult): string {
+  const notes = [];
+  if (alreadyBack > 0) notes.push(`${alreadyBack} ${alreadyBack === 1 ? "was" : "were"} already back`);
+  if (failed > 0) notes.push(`${failed} couldn't come back`);
+  const extra = notes.length > 0 ? ` (${notes.join(", ")})` : "";
+  return restored > 0 ? `Restored ${restored}${extra}` : `Nothing to restore${extra}`;
 }
 
 // "Deleted 3 tasks", "Deleted 2 tasks and 1 entry", "… (1 was already gone)".

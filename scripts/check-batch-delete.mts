@@ -12,7 +12,9 @@
 //   - rows already gone, or belonging to someone else, are skipped (and a
 //     second made-up person's task is never touched);
 //   - at most 200 at once, and 200 goes through quickly;
-//   - bad input and a signed-out visitor change nothing.
+//   - bad input and a signed-out visitor change nothing;
+//   - Undo (part d) brings a whole batch back, with everything in it, and
+//     copes with tasks already restored or deleted forever meanwhile.
 // Only the two made-up people's rows are created and deleted (at the start
 // and the end); your own tasks are never touched or shown. Exits with an
 // error if any check fails.
@@ -192,6 +194,113 @@ try {
   );
   check(`200 at once: all deleted (took ${seconds.toFixed(1)}s)`, r.tasks === 200 && seconds < 4, JSON.stringify({ ...r, taskIds: r.taskIds.length }));
   check("…and all 200 are in Recently deleted", binned[0].n === 200, `${binned[0].n} found`);
+
+  // ── Undo (part d) ──
+  console.log("\nUndo after a batch delete\n");
+
+  // 9. Undo the 200: all back quickly, and out of Recently deleted.
+  const undoStarted = Date.now();
+  let u = await asTestUser(() => tasks.restoreBatch({ taskIds: r.taskIds, ticks: r.ticks }));
+  const undoSeconds = (Date.now() - undoStarted) / 1000;
+  const { rows: back } = await owner.query(
+    `SELECT count(*)::int AS n FROM "Task" WHERE "userId" = $1 AND title LIKE 'Batch bulk %'`,
+    [TEST_USER],
+  );
+  const { rows: stillBinned } = await owner.query(
+    `SELECT count(*)::int AS n FROM "RecentlyDeleted" WHERE "userId" = $1 AND copy->>'title' LIKE 'Batch bulk %'`,
+    [TEST_USER],
+  );
+  check(
+    `undo 200: all back (took ${undoSeconds.toFixed(1)}s)`,
+    u.restored === 200 && u.alreadyBack === 0 && u.failed === 0 && back[0].n === 200 && undoSeconds < 4,
+    JSON.stringify(u),
+  );
+  check("…and none left in Recently deleted", stillBinned[0].n === 0, `${stillBinned[0].n} left`);
+
+  // 10. Everything about a task comes back: notes, steps, category, history.
+  const full = await addTask(TEST_USER, "Batch full", { notes: "Keep the receipt", repeat: "weekly" });
+  await addStep(full, "Step one", 0);
+  await addStep(full, "Step two", 1);
+  const fullTick = await addTick(full, "2026-11-20");
+  const { rows: cat } = await owner.query(
+    `INSERT INTO "Category" (id, "userId", name) VALUES (gen_random_uuid(), $1, 'Batch errands') RETURNING id`,
+    [TEST_USER],
+  );
+  await owner.query(`UPDATE "Task" SET "categoryId" = $1 WHERE id = $2`, [cat[0].id, full]);
+  const plain = await addTask(TEST_USER, "Batch plain");
+  r = await asTestUser(() => tasks.deleteManyWithCopies([{ taskId: full }, { taskId: plain }]));
+  u = await asTestUser(() => tasks.restoreBatch({ taskIds: r.taskIds, ticks: r.ticks }));
+  const { rows: fullBack } = await owner.query(
+    `SELECT t.notes, t.repeat, c.name AS category,
+       (SELECT string_agg(title, '|' ORDER BY position) FROM "Subtask" WHERE "taskId" = t.id) AS steps,
+       (SELECT count(*)::int FROM "TaskCompletion" WHERE id = $2) AS tick
+     FROM "Task" t LEFT JOIN "Category" c ON c.id = t."categoryId" WHERE t.id = $1`,
+    [full, fullTick],
+  );
+  check("undo 2 tasks: both back", u.restored === 2 && (await exists("Task", plain)), JSON.stringify(u));
+  check(
+    "…with notes, repeat, steps in order, category and history",
+    fullBack[0]?.notes === "Keep the receipt" &&
+      fullBack[0]?.repeat === "weekly" &&
+      fullBack[0]?.steps === "Step one|Step two" &&
+      fullBack[0]?.category === "Batch errands" &&
+      fullBack[0]?.tick === 1,
+    JSON.stringify(fullBack[0]),
+  );
+
+  // 11. A single "Finished today" entry comes back to its task.
+  const gym = await addTask(TEST_USER, "Batch gym 2", { repeat: "daily" });
+  const gymTick = await addTick(gym, "2026-11-24");
+  r = await asTestUser(() => tasks.deleteManyWithCopies([{ completionId: gymTick }]));
+  u = await asTestUser(() => tasks.restoreBatch({ taskIds: r.taskIds, ticks: r.ticks }));
+  check("undo an entry: it's back on its task", u.restored === 1 && (await exists("TaskCompletion", gymTick)), JSON.stringify(u));
+
+  // 12. Restored from Settings before Undo: counted as already back, the rest still come back.
+  const s1 = await addTask(TEST_USER, "Batch settings 1");
+  const s2 = await addTask(TEST_USER, "Batch settings 2");
+  r = await asTestUser(() => tasks.deleteManyWithCopies([{ taskId: s1 }, { taskId: s2 }]));
+  await asTestUser(() => tasks.restoreFromBin(s1)); // as if restored from Settings → Recently deleted
+  u = await asTestUser(() => tasks.restoreBatch({ taskIds: r.taskIds, ticks: r.ticks }));
+  check(
+    "one already restored from Settings: 1 restored, 1 already back",
+    u.restored === 1 && u.alreadyBack === 1 && u.failed === 0 && (await exists("Task", s2)),
+    JSON.stringify(u),
+  );
+
+  // 13. Deleted forever from Settings before Undo: can't come back, counted.
+  const f1 = await addTask(TEST_USER, "Batch forever");
+  r = await asTestUser(() => tasks.deleteManyWithCopies([{ taskId: f1 }]));
+  await asTestUser(() => tasks.deleteFromBin(f1));
+  u = await asTestUser(() => tasks.restoreBatch({ taskIds: r.taskIds, ticks: r.ticks }));
+  check("deleted forever meanwhile: counted as couldn't come back", u.restored === 0 && u.failed === 1, JSON.stringify(u));
+
+  // 14. Someone else's: Undo can't bring back (or touch) another person's task.
+  const theirs2 = await addTask(OTHER_USER, "Someone else's binned task");
+  await owner.query(
+    `INSERT INTO "RecentlyDeleted" (id, "userId", copy) VALUES ($1::uuid, $2::uuid, jsonb_build_object('id', $3::text, 'title', 'Theirs'))`,
+    [theirs2, OTHER_USER, theirs2],
+  );
+  await owner.query(`DELETE FROM "Task" WHERE id = $1`, [theirs2]); // now only in their Recently deleted
+  u = await asTestUser(() => tasks.restoreBatch({ taskIds: [theirs2], ticks: [] }));
+  check(
+    "someone else's binned task: not restored, still in their Recently deleted",
+    u.restored === 0 && !(await exists("Task", theirs2)) && (await exists("RecentlyDeleted", theirs2)),
+    JSON.stringify(u),
+  );
+
+  // 15. Bad input changes nothing.
+  check(
+    "undo with nothing in it is refused",
+    (await errorOf(() => asTestUser(() => tasks.restoreBatch({ taskIds: [], ticks: [] })))) !== null,
+  );
+  check(
+    "undo with a made-up id format is refused",
+    (await errorOf(() => asTestUser(() => tasks.restoreBatch({ taskIds: ["nope"], ticks: [] })))) !== null,
+  );
+  check(
+    "undo by a signed-out visitor is refused",
+    (await errorOf(() => tasks.restoreBatch({ taskIds: [s2], ticks: [] }))) !== null,
+  );
 } finally {
   await cleanUp();
   await owner.end();
