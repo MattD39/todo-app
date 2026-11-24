@@ -538,3 +538,17 @@ Short entries, added as each new step is finished and committed.
     checking a saved copy, so both are equally careful.
   - **Testing:** 11 new free checks (31 in all, passed 3 times), the database
     privacy tests, and tests in the app including the "already back" case.
+
+- **Nov 24 — Repeating tasks on the Done tab.** A ticked repeating task
+  ("brush teeth") now shows on Done as its own entry, newest first, mixed
+  with normal finished tasks, as well as under "Finished today". It already
+  appeared on Upcoming for its next date.
+  - **Cause:** Done only listed tasks marked done, and a repeating task never
+    is: ticking it saves an entry and moves the task to its next date.
+  - **My decision:** I changed the Nov 18 plan (entries only in "Finished
+    today") so I can see on Done that I did it.
+  - **Safety:** only a task's newest entry can be un-ticked (the Calendar's
+    rule; the server already enforced it). Older entries show a faded tick.
+    Deleting an entry, by swipe or in edit mode, removes only that entry.
+  - **Testing:** 4 new free checks (35 in all, passed 3 times) and 16 tests in
+    the app, including deleting one entry from Done in edit mode.

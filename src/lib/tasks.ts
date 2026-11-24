@@ -103,17 +103,51 @@ export async function listOpenTasks(): Promise<TaskDTO[]> {
   return rows.map(toDTO);
 }
 
-// Finished tasks, most recently finished first.
-export async function listDoneTasks(limit = 200): Promise<TaskDTO[]> {
-  const rows = await asCurrentUser((tx, userId) =>
-    tx.task.findMany({
+// The Done tab: finished tasks AND each tick of a repeating task (a repeating
+// task is never "done": ticking it records an entry and moves it to its next
+// date), newest first, at most `limit` in all. An entry has a completionId,
+// so swiping or batch-deleting it removes only that entry. Only a task's most
+// recent entry can be un-ticked (isLatest), the same rule as the Calendar.
+export async function listDoneTasks(limit = 200): Promise<(TaskDTO | TickDTO)[]> {
+  const [rows, completions, latest] = await asCurrentUser(async (tx, userId) => {
+    const rows = await tx.task.findMany({
       where: { userId, done: true },
       include: taskInclude,
       orderBy: { doneAt: { sort: "desc", nulls: "last" } },
       take: limit,
-    }),
-  );
-  return rows.map(toDTO);
+    });
+    const completions = await tx.taskCompletion.findMany({
+      where: { task: { userId } },
+      include: { task: { include: taskInclude } },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    // The most recent tick of each of those tasks.
+    const latest = await tx.taskCompletion.findMany({
+      where: { taskId: { in: [...new Set(completions.map((c) => c.taskId))] }, task: { userId } },
+      orderBy: { createdAt: "desc" },
+      distinct: ["taskId"],
+      select: { id: true },
+    });
+    return [rows, completions, latest] as const;
+  });
+  const latestIds = new Set(latest.map((c) => c.id));
+  const entries: (TaskDTO | TickDTO)[] = [
+    ...rows.map(toDTO),
+    ...completions.map(
+      (c): TickDTO => ({
+        ...toDTO(c.task),
+        done: true,
+        doneAt: c.createdAt.toISOString(),
+        completionId: c.id,
+        completedOn: dateFromDb(c.completedOn),
+        previousDueDate: c.previousDueDate ? dateFromDb(c.previousDueDate) : null,
+        isLatest: latestIds.has(c.id),
+      }),
+    ),
+  ];
+  // ISO timestamps sort correctly as text; a task with no finish time goes last.
+  return entries.sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? "")).slice(0, limit);
 }
 
 // Everything finished in the last 36 hours, most recent first: one-off tasks

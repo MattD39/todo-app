@@ -14,7 +14,9 @@
 //   - at most 200 at once, and 200 goes through quickly;
 //   - bad input and a signed-out visitor change nothing;
 //   - Undo (part d) brings a whole batch back, with everything in it, and
-//     copes with tasks already restored or deleted forever meanwhile.
+//     copes with tasks already restored or deleted forever meanwhile;
+//   - the Done tab (part e) lists each tick of a repeating task as its own
+//     entry, newest first, and marks which one is the latest.
 // Only the two made-up people's rows are created and deleted (at the start
 // and the end); your own tasks are never touched or shown. Exits with an
 // error if any check fails.
@@ -72,10 +74,12 @@ async function addStep(taskId: string, title: string, position: number) {
     position,
   ]);
 }
-async function addTick(taskId: string, completedOn: string): Promise<string> {
+// ago: when it was ticked, like "1 hour" (default: now).
+async function addTick(taskId: string, completedOn: string, ago = "0 seconds"): Promise<string> {
   const { rows } = await owner.query(
-    `INSERT INTO "TaskCompletion" (id, "taskId", "completedOn") VALUES (gen_random_uuid(), $1, $2::date) RETURNING id`,
-    [taskId, completedOn],
+    `INSERT INTO "TaskCompletion" (id, "taskId", "completedOn", "createdAt")
+     VALUES (gen_random_uuid(), $1, $2::date, now() - $3::interval) RETURNING id`,
+    [taskId, completedOn, ago],
   );
   return rows[0].id;
 }
@@ -301,6 +305,32 @@ try {
     "undo by a signed-out visitor is refused",
     (await errorOf(() => tasks.restoreBatch({ taskIds: [s2], ticks: [] }))) !== null,
   );
+
+  // ── The Done tab's list (part e) ──
+  console.log("\nThe Done tab: repeating-task entries\n");
+  await cleanUp(); // a clean slate, so the list holds only what's added here
+  const finished = await addTask(TEST_USER, "Done plain");
+  await owner.query(`UPDATE "Task" SET done = true, "doneAt" = now() - interval '2 hours' WHERE id = $1`, [finished]);
+  const teeth = await addTask(TEST_USER, "Done brush teeth", { repeat: "daily" });
+  const olderTick = await addTick(teeth, "2026-11-23", "3 hours");
+  const newerTick = await addTick(teeth, "2026-11-24", "1 hour");
+  const someoneElses = await addTask(OTHER_USER, "Done their repeat", { repeat: "daily" });
+  await addTick(someoneElses, "2026-11-24", "1 hour");
+  const list = await asTestUser(() => tasks.listDoneTasks(100));
+  const shape = list.map((t) => `${t.title}${t.completionId ? ` [entry${"isLatest" in t && t.isLatest ? ", latest" : ""}]` : ""}`);
+  check(
+    "a repeating task's ticks show as their own entries, newest first, mixed with finished tasks",
+    JSON.stringify(shape) ===
+      JSON.stringify(["Done brush teeth [entry, latest]", "Done plain", "Done brush teeth [entry]"]),
+    JSON.stringify(shape),
+  );
+  check(
+    "each entry is its tick (so deleting it removes only that tick)",
+    list[0].completionId === newerTick && list[2].completionId === olderTick,
+  );
+  check("someone else's ticks never show", !list.some((t) => t.title === "Done their repeat"));
+  const two = await asTestUser(() => tasks.listDoneTasks(2));
+  check("the limit counts entries and tasks together", two.length === 2, `${two.length} shown`);
 } finally {
   await cleanUp();
   await owner.end();
