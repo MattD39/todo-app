@@ -477,3 +477,18 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** 4 new free price checks (passed 3 times), a live check that
     a second message reads from the cache (one run, all checks passed), and
     the cache numbers in my own dev server log.
+
+- **Nov 24 — Select several tasks, part a: Edit mode.** Today, Upcoming and
+  Done have an Edit button. In edit mode every row slides over like a swipe
+  and shows a select circle where the Delete button would be; tapping a row
+  selects it (it turns light green) instead of opening or ticking it.
+  Swiping and the Add task button are off, and Done (or Esc) leaves edit mode
+  and clears the selection. Nothing can be deleted yet: that's part b.
+  - **Keyboard and screen readers:** each row becomes one checkbox named
+    after the task. Tab moves between rows, Space or Enter selects.
+  - **Problem found in my testing:** the keyboard focus was only a thin line
+    along the row's top, easy to miss. Cause: the row clips anything that
+    spills outside it, including the browser's own focus outline. Fix: a 2px
+    ring drawn inside the row, on top of its contents, shown only for
+    keyboard focus.
+  - **Testing:** 11 tests in the app plus 6 for the focus ring.

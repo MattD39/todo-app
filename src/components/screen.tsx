@@ -10,6 +10,7 @@ import { CategoryChips } from "./category-chips";
 import { SettingsButton, SettingsButtonPlaceholder } from "./settings-menu";
 import { RefreshOnReturn } from "./refresh-on-return";
 import { ChatTabDot } from "./chat-tab-dot";
+import { EditButton, EditModeProvider } from "./edit-mode";
 
 export { Status } from "./status";
 
@@ -74,8 +75,18 @@ export async function loadScreen(searchParams: SearchParams) {
 
 export type ScreenData = Awaited<ReturnType<typeof loadScreen>>;
 
+// The screens where you can select several tasks with Edit (the ones with
+// swipe to delete).
+const EDIT_TABS: Tab[] = ["today", "upcoming", "done"];
+
 export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; children: React.ReactNode }) {
+  const screen = <ScreenFrame tab={tab} data={data}>{children}</ScreenFrame>;
+  return EDIT_TABS.includes(tab) ? <EditModeProvider>{screen}</EditModeProvider> : screen;
+}
+
+function ScreenFrame({ tab, data, children }: { tab: Tab; data: ScreenData; children: React.ReactNode }) {
   const stats = buildStats(data.open, data.now);
+  const chips = <CategoryChips categories={data.categories} selected={data.category} />;
   return (
     <TaskEditorProvider
       categories={data.categories}
@@ -105,7 +116,14 @@ export function Screen({ tab, data, children }: { tab: Tab; data: ScreenData; ch
         }
       >
         {/* The chat always looks at every task, so the category filter doesn't apply there. */}
-        {tab !== "chat" && <CategoryChips categories={data.categories} selected={data.category} />}
+        {EDIT_TABS.includes(tab) ? (
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">{chips}</div>
+            <EditButton />
+          </div>
+        ) : (
+          tab !== "chat" && chips
+        )}
       </ScreenHeader>
 
       {children}

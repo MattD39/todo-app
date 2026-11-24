@@ -21,6 +21,7 @@ import { StepsEditor } from "./steps-editor";
 import { useBackdropClose } from "./use-backdrop-close";
 import { useFitVisibleScreen } from "./use-fit-visible-screen";
 import { useSwipeToClose } from "./use-swipe-to-close";
+import { useEditMode } from "./edit-mode";
 
 // Everything for adding and editing tasks:
 //   • TaskEditorProvider — wraps a screen; owns "is the editor open, and for which task?"
@@ -64,6 +65,7 @@ export function TaskEditorProvider({
   children: React.ReactNode;
 }) {
   const [editing, setEditing] = useState<Editing | null>(null);
+  const selecting = useEditMode()?.editing ?? false; // edit mode on the task list
   // Bumped on every open so the form starts fresh each time.
   const [openCount, setOpenCount] = useState(0);
 
@@ -92,7 +94,8 @@ export function TaskEditorProvider({
     <OpenEditor value={open}>
       <ShowToast value={toast}>
         {children}
-        {showAddButton && (
+        {/* Hidden in edit mode (selecting tasks), and with it Enter-to-add. */}
+        {showAddButton && !selecting && (
           <AddTaskButton enterToAdd={enterToAdd} onClick={() => open({ mode: "new", dueDate: calendarDay(today) })} />
         )}
         {editing && (

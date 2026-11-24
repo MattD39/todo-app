@@ -129,7 +129,7 @@ function TaskRow({
     // entry; any other row deletes the whole task.
     const target = task.completionId ? { completionId: task.completionId } : { taskId: task.id };
     return (
-      <SwipeRow target={target} className={`px-3.5 py-3 ${overdue ? "bg-over-soft" : ""}`}>
+      <SwipeRow target={target} label={task.title} className={`px-3.5 py-3 ${overdue ? "bg-over-soft" : ""}`}>
         {content}
       </SwipeRow>
     );
