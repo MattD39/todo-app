@@ -19,7 +19,8 @@
     "check:photos": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-photos.mts",
     "make:schedule-photos": "node scripts/make-schedule-photos.mts",
     "check:batch-delete": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-batch-delete.mts",
-    "check:categories": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-categories.mts"
+    "check:categories": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-categories.mts",
+    "check:saved-categories": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-saved-categories.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.8.0",

@@ -581,3 +581,24 @@ Short entries, added as each new step is finished and committed.
     so I pick one (with exactly one on, it starts in that one, as before).
   - **Testing:** a new free check (`npm run check:categories`, 22 checks of the
     chip rules, passed 3 times) and 15 tests in the app.
+
+- **Nov 24 — Saved categories, part 1: the database.** Categories are
+  becoming "like contacts": a saved list (offered when adding a task and
+  managed in Settings), while a category typed for one task is a one-off.
+  This step adds the saved list to the database and the server code behind
+  it; the screens come next.
+  - **What changed:** each category is marked saved or one-off. New accounts
+    start with four saved categories (Work, Fitness, Errands, Personal), added
+    by a small database trigger when an account is created, so existing
+    accounts are never touched.
+  - **Problem found:** none of my old categories was used by a task any more
+    (my test tasks were deleted, but categories stay), so "save the ones I
+    use" would have saved nothing. **My decision:** save Work, Personal,
+    Errands and Fitness; my other old ones stay as hidden one-offs.
+  - **Care taken:** the localhost app and the live site share one database,
+    so I approved the change before it was applied. It only adds things, and
+    the live site's code simply ignores it. If the starter step ever failed,
+    signing up still works.
+  - **Testing:** a new free check (`npm run check:saved-categories`, 20
+    checks, including a fake new account that's always undone), the database
+    privacy tests, the other free checks, and 8 tests in the app.

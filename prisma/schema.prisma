@@ -30,6 +30,9 @@ model Category {
   id        String   @id @default(uuid()) @db.Uuid
   userId    String   @db.Uuid
   name      String
+  // On the user's saved list ("like contacts"): offered in the task sheet and
+  // managed in Settings. false = a one-off typed for some task(s) only.
+  saved     Boolean  @default(false)
   createdAt DateTime @default(now()) @db.Timestamptz
   tasks     Task[]
 

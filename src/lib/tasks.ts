@@ -273,6 +273,133 @@ export async function listCategories(): Promise<CategoryDTO[]> {
   );
 }
 
+// ─── Saved categories ("like contacts") ──────────────────────────────────────
+// A category is either on the saved list (offered in the task sheet, managed
+// in Settings → Categories) or a one-off typed for some task(s) only. Typing a
+// name that matches a saved one, whatever its capitals, uses the saved one.
+// New accounts start with Work, Fitness, Errands and Personal (a database
+// trigger adds them; see the saved_categories migration).
+
+// A saved category with how many tasks use it (finished ones included).
+export type SavedCategory = { id: string; name: string; tasks: number; finished: number };
+
+// Your saved list, A to Z, with how many tasks use each.
+export async function listSavedCategories(): Promise<SavedCategory[]> {
+  const rows = await asCurrentUser((tx, userId) =>
+    tx.category.findMany({
+      where: { userId, saved: true },
+      select: {
+        id: true,
+        name: true,
+        _count: { select: { tasks: true } },
+        tasks: { where: { done: true }, select: { id: true } },
+      },
+      orderBy: { name: "asc" },
+    }),
+  );
+  return rows.map((r) => ({ id: r.id, name: r.name, tasks: r._count.tasks, finished: r.tasks.length }));
+}
+
+// One-offs in use: categories that aren't saved but some unfinished task has
+// (Settings → Categories → "Not saved", each with a Save button). A to Z.
+export async function listOneOffCategories(): Promise<{ id: string; name: string; tasks: number }[]> {
+  const rows = await asCurrentUser((tx, userId) =>
+    tx.category.findMany({
+      where: { userId, saved: false, tasks: { some: { done: false } } },
+      select: { id: true, name: true, _count: { select: { tasks: { where: { done: false } } } } },
+      orderBy: { name: "asc" },
+    }),
+  );
+  return rows.map((r) => ({ id: r.id, name: r.name, tasks: r._count.tasks }));
+}
+
+// Puts a category on the saved list: "Add" in Settings, "Add category…" and
+// "Save to list" in the task sheet, and Claude's save action (only after you
+// say yes). A one-off with that name (any capitals) becomes saved, keeping
+// its tasks; otherwise a new saved category is made. Returns its name and
+// whether it was already saved (then nothing changed).
+export async function saveCategory(name: unknown): Promise<{ name: string; alreadySaved: boolean }> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  const clean = cleanCategoryName(name);
+  return asCurrentUser(async (tx, userId) => {
+    const existing = await tx.category.findFirst({
+      where: { userId, name: { equals: clean, mode: "insensitive" } },
+      select: { id: true, name: true, saved: true },
+    });
+    if (existing?.saved) return { name: existing.name, alreadySaved: true };
+    if (existing) {
+      await tx.category.update({ where: { id: existing.id, userId }, data: { saved: true } });
+      return { name: existing.name, alreadySaved: false };
+    }
+    const created = await tx.category.upsert({
+      where: { userId_name: { userId, name: clean } },
+      create: { userId, name: clean, saved: true },
+      update: { saved: true },
+      select: { name: true },
+    });
+    return { name: created.name, alreadySaved: false };
+  });
+}
+
+// Renames a saved category (its tasks follow, since they point at it). Only
+// changing its capitals is fine; a name another category already has isn't.
+export async function renameCategory(id: unknown, name: unknown): Promise<string> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!isUuid(id)) throw new TaskError("That category doesn't exist.");
+  const clean = cleanCategoryName(name);
+  return asCurrentUser(async (tx, userId) => {
+    const category = await tx.category.findFirst({ where: { id, userId, saved: true }, select: { id: true } });
+    if (!category) throw new TaskError("That category doesn't exist.");
+    const clash = await tx.category.findFirst({
+      where: { userId, id: { not: id }, name: { equals: clean, mode: "insensitive" } },
+      select: { name: true },
+    });
+    if (clash) throw new TaskError(`You already have a category called “${clash.name}”.`);
+    await tx.category.update({ where: { id, userId }, data: { name: clean } });
+    return clean;
+  });
+}
+
+// How many tasks would lose a saved category if it were deleted, for the
+// "Delete Work? 12 tasks will lose this category (3 of them finished)." box.
+export async function categoryUsage(id: unknown): Promise<{ name: string; tasks: number; finished: number }> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!isUuid(id)) throw new TaskError("That category doesn't exist.");
+  return asCurrentUser(async (tx, userId) => {
+    const category = await tx.category.findFirst({ where: { id, userId, saved: true }, select: { name: true } });
+    if (!category) throw new TaskError("That category doesn't exist.");
+    const [tasks, finished] = await Promise.all([
+      tx.task.count({ where: { userId, categoryId: id } }),
+      tx.task.count({ where: { userId, categoryId: id, done: true } }),
+    ]);
+    return { name: category.name, tasks, finished };
+  });
+}
+
+// Deletes a saved category (only from Settings). Every task that had it keeps
+// going with no category, so its chip goes too. Returns how many tasks lost it.
+export async function deleteSavedCategory(id: unknown): Promise<number> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  if (!isUuid(id)) throw new TaskError("That category doesn't exist.");
+  return asCurrentUser(async (tx, userId) => {
+    const category = await tx.category.findFirst({ where: { id, userId, saved: true }, select: { id: true } });
+    if (!category) throw new TaskError("That category doesn't exist.");
+    // Done by hand (rather than relying on the database's "set to empty" rule)
+    // so the count is exact and it's plain what happens to the tasks.
+    const { count } = await tx.task.updateMany({ where: { userId, categoryId: id }, data: { categoryId: null } });
+    await tx.category.deleteMany({ where: { id, userId } });
+    return count;
+  });
+}
+
+// A category name as typed: spaces tidied, not empty, not too long.
+function cleanCategoryName(name: unknown): string {
+  const clean = (typeof name === "string" ? name : "").trim().replace(/\s+/g, " ");
+  if (!clean) throw new TaskError("Type a name for the category.");
+  if (clean.length > MAX_CATEGORY) throw new TaskError(`Category names can be up to ${MAX_CATEGORY} characters.`);
+  return clean;
+}
+
 // ─── Writing ─────────────────────────────────────────────────────────────────
 
 export async function createTask(input: NewTaskInput): Promise<TaskDTO> {
