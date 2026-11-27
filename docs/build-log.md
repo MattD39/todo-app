@@ -648,3 +648,10 @@ Short entries, added as each new step is finished and committed.
     to ask; one paid run with Claude ($0.03) where all 13 new checks passed
     (one older, known-flaky check on my own photo didn't, unrelated); the
     database privacy tests; and 9 tests in the app.
+
+- **Nov 27 — One-tap Close in Settings → Categories.** The Categories and
+  Recently deleted screens now have a Close button in the top right that
+  shuts Settings in one tap and goes straight back to the tab I was on.
+  Before, I had to tap "‹ Settings" and then Close. "‹ Settings" still goes
+  back one step.
+  - **Testing:** 6 tests in the app.

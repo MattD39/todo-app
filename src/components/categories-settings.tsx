@@ -184,10 +184,12 @@ export function CategoriesRow({
 export function CategoriesScreen({
   categories,
   onBack,
+  onClose,
   scrollRef,
 }: {
   categories: CategoriesState;
   onBack: () => void;
+  onClose: () => void; // shuts the whole Settings sheet, back to the tab you came from
   scrollRef: RefObject<HTMLDivElement | null>; // what scrolls (for swipe down to close)
 }) {
   const backRef = useRef<HTMLButtonElement>(null);
@@ -215,6 +217,9 @@ export function CategoriesScreen({
           <h2 id="settings-title" className="font-display text-[1.2rem] font-bold">
             Categories
           </h2>
+          <button type="button" onClick={onClose} className="justify-self-end p-1.5 text-muted">
+            Close
+          </button>
         </div>
       </div>
 

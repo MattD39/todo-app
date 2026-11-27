@@ -107,7 +107,7 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
             ref={panelRef}
             className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink"
           >
-            <RecentlyDeletedScreen bin={bin} onBack={backToSettings} scrollRef={binScrollRef} />
+            <RecentlyDeletedScreen bin={bin} onBack={backToSettings} onClose={onClose} scrollRef={binScrollRef} />
           </div>
         ) : view === "categories" ? (
           // Same shape: header at the top, the rest scrolls.
@@ -115,7 +115,12 @@ function SettingsSheet({ email, onClose }: { email: string; onClose: () => void 
             ref={panelRef}
             className="absolute inset-x-0 bottom-0 mx-auto flex h-[92%] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[18px] bg-bg text-ink"
           >
-            <CategoriesScreen categories={categories} onBack={backToSettings} scrollRef={categoriesScrollRef} />
+            <CategoriesScreen
+              categories={categories}
+              onBack={backToSettings}
+              onClose={onClose}
+              scrollRef={categoriesScrollRef}
+            />
           </div>
         ) : (
           <div

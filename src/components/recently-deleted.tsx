@@ -221,10 +221,12 @@ export function RecentlyDeletedRow({
 export function RecentlyDeletedScreen({
   bin,
   onBack,
+  onClose,
   scrollRef,
 }: {
   bin: RecentlyDeletedState;
   onBack: () => void;
+  onClose: () => void; // shuts the whole Settings sheet, back to the tab you came from
   scrollRef: RefObject<HTMLDivElement | null>; // the list, which scrolls (for swipe down to close)
 }) {
   const backRef = useRef<HTMLButtonElement>(null);
@@ -252,6 +254,9 @@ export function RecentlyDeletedScreen({
           <h2 id="settings-title" className="font-display text-[1.2rem] font-bold">
             Recently deleted
           </h2>
+          <button type="button" onClick={onClose} className="justify-self-end p-1.5 text-muted">
+            Close
+          </button>
         </div>
       </div>
 
