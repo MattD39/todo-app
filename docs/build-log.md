@@ -670,3 +670,14 @@ Short entries, added as each new step is finished and committed.
   - **Kept:** a long chat still sticks to the newest message, including when
     the keyboard opens.
   - **Testing:** 5 tests in the app on the computer; iPhone tests next.
+
+- **Nov 27 — Fix for the Chat keyboard fix.** On the iPhone the first try
+  didn't work: the page still slid up and the tab bar stayed.
+  - **Cause → fix:** to spot the keyboard, the app compared the screen's
+    height with the visible height. On iPhone both numbers shrink together
+    when the keyboard opens, so the app never saw a keyboard and never
+    resized Chat. Now it remembers the visible height from before the
+    keyboard and compares with that. It also always fits Chat to the visible
+    part of the screen, the same way the task editor already does.
+  - **Lesson:** keyboard behaviour can only be tested on the phone itself;
+    the computer tests passed because a computer has no on-screen keyboard.

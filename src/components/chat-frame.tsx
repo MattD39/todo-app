@@ -21,20 +21,36 @@ export function ChatFrame({ children }: { children: React.ReactNode }) {
     const root = document.documentElement;
     if (!view || !el) return;
 
+    // The visible height with no keyboard: the tallest it's been since the
+    // screen last changed width (turning the phone resets it). We can't
+    // compare with window.innerHeight instead: on iPhone that shrinks along
+    // with the keyboard, so the difference is always about 0.
+    let fullHeight = 0;
+    let lastWidth = 0;
+
     const fit = () => {
-      const zoomed = Math.abs(view.scale - 1) > 0.01;
-      // Over 100px hidden means a keyboard (not just a toolbar).
-      const keyboard = !zoomed && window.innerHeight - view.height > 100;
-      if (keyboard) {
-        el.style.height = `${view.height}px`;
-        el.style.top = `${view.offsetTop}px`;
-        root.dataset.keyboard = "open";
-      } else {
-        // Keyboard down (or pinch-zoomed): the normal full-screen size.
+      // Pinch-zoomed in: leave the normal full-screen size alone.
+      if (Math.abs(view.scale - 1) > 0.01) {
         el.style.height = "";
         el.style.top = "";
         delete root.dataset.keyboard;
+        return;
       }
+      if (view.width !== lastWidth) {
+        lastWidth = view.width;
+        fullHeight = 0;
+      }
+      fullHeight = Math.max(fullHeight, view.height);
+
+      // Always match the part of the screen you can see, and follow it when
+      // the iPhone shifts it to show the message box. (The task editor's
+      // sheet does the same, see use-fit-visible-screen.ts.)
+      el.style.height = `${view.height}px`;
+      el.style.top = `${view.offsetTop}px`;
+
+      // Over 100px shorter than usual means a keyboard (not just a toolbar).
+      if (fullHeight - view.height > 100) root.dataset.keyboard = "open";
+      else delete root.dataset.keyboard;
     };
 
     fit();
