@@ -748,3 +748,22 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** a new free check (28 cases, all passed; breaking the rule on
     purpose made 8 fail, so it really checks), the other free checks, and
     12 tests in the app.
+
+- **Nov 27 — New list order, part 3b: the new task glows.** When a task you
+  add shows on the screen you're on, the app now finds its row, scrolls it
+  to the middle of the screen if it's out of sight, and gives it a soft
+  green glow that fades over about 2 seconds.
+  - **Waiting first:** it waits for the list to reload, then for the sheet
+    and the iPhone keyboard to finish closing, so it measures the screen at
+    full height and the row doesn't end up under the header or tab bar.
+  - **Swipe still works:** the glow is on the part of the row that holds the
+    text, so the red Delete button slides over it without turning green.
+  - **Reduce motion:** with it on, the page jumps to the row instead of
+    gliding. The glow stays, because a colour fade isn't movement.
+  - **Safety net:** if the row never shows up, a plain "Added" message
+    appears instead.
+  - **Tricky bit:** the first test showed no glow at all. The dev server was
+    still sending an old copy of the stylesheet without it. Clearing its
+    build cache and restarting fixed it. Now I check the stylesheet the
+    server actually sends after any style change.
+  - **Testing:** the free checks, plus 11 tests in the app.

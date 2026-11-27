@@ -79,6 +79,9 @@ function TaskRow({
 }) {
   const overdue = !planned && isOverdue(task, now);
   const due = planned ? null : dueLabel(task, now, overdue, hideTodayDate);
+  // The task's own row (not a "Finished today" entry or a later repeat) can
+  // glow after you add it. See added-glow.ts.
+  const rowId = task.completionId || planned ? undefined : task.id;
 
   const content = (
     <>
@@ -134,13 +137,19 @@ function TaskRow({
     // entry; any other row deletes the whole task.
     const target = task.completionId ? { completionId: task.completionId } : { taskId: task.id };
     return (
-      <SwipeRow target={target} label={task.title} className={`px-3.5 py-3 ${overdue ? "bg-over-soft" : ""}`}>
+      <SwipeRow
+        target={target}
+        label={task.title}
+        rowId={rowId}
+        className={`px-3.5 py-3 ${overdue ? "bg-over-soft" : ""}`}
+      >
         {content}
       </SwipeRow>
     );
   }
   return (
     <li
+      data-task-row={rowId}
       className={`flex items-start gap-3 border-t border-line px-3.5 py-3 first:border-t-0 ${
         overdue ? "bg-over-soft" : ""
       }`}

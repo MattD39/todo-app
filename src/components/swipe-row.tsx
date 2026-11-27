@@ -32,10 +32,12 @@ export function SwipeRow({
   target,
   label,
   className,
+  rowId,
   children,
 }: {
   target: Target; // a whole task, or one tick of a repeating task
   label: string; // the task's title, read out by screen readers in edit mode
+  rowId?: string; // marks the row for the glow after adding a task (added-glow.ts)
   className: string; // the row's own look (padding, overdue colour)
   children: React.ReactNode;
 }) {
@@ -198,6 +200,9 @@ export function SwipeRow({
         inert={editing}
         // The tick box folds away in edit mode (see TaskRow in task-list.tsx).
         data-editing={editing}
+        // The glow goes on this part (the text), so it stays under the red
+        // Delete button, which sits on top of it.
+        data-task-row={rowId}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}

@@ -24,6 +24,7 @@ import { useFitVisibleScreen } from "./use-fit-visible-screen";
 import { useSwipeToClose } from "./use-swipe-to-close";
 import { useEditMode } from "./edit-mode";
 import { CategoryField } from "./category-field";
+import { showAddedTask } from "./added-glow";
 
 // Everything for adding and editing tasks:
 //   • TaskEditorProvider — wraps a screen; owns "is the editor open, and for which task?"
@@ -96,13 +97,16 @@ export function TaskEditorProvider({
   const onAdded = useCallback(
     (added: AddedTask) => {
       if (!screen) return;
-      const { message } = addedTaskMessage(added, {
+      const { message, glow } = addedTaskMessage(added, {
         screen,
         today,
         picked,
         calendarDay: calendarDay(today) ?? today,
       });
       if (message) toast(message, undefined, 2000);
+      // It's on this screen: scroll to it and make it glow. If its row
+      // never shows up, at least say it was added.
+      else if (glow) showAddedTask(added.id, () => toast("Added", undefined, 2000));
     },
     [screen, today, picked, toast],
   );
