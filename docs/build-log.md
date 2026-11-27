@@ -810,3 +810,15 @@ Short entries, added as each new step is finished and committed.
     showed my account name and other chat titles.
   - **Small files:** the pictures were shrunk from about 1.3 MB to 210 KB in
     total, so the page loads quickly.
+
+- **Nov 27 — Privacy scan before going public.** I checked the code and all
+  81 commits for secrets (API keys, database passwords, `.env` files) and
+  personal details (email, surname, account ID, phone numbers). None were
+  found. Two small tidy-ups came out of it:
+  - **A neutral test time zone:** five checks pretended to be in my own time
+    zone. They now use New York instead, which tests exactly the same
+    things. All five pass.
+  - **A safety net:** Claude Code's personal settings file is now on git's
+    ignore list, so it can never be committed by accident.
+  - **Decision (mine):** my name stays on the commits. It's a portfolio, so
+    employers should see who built it.

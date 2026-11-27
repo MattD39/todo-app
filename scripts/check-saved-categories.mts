@@ -45,7 +45,7 @@ const TEST_USER = "00000000-0000-4000-8000-0000000c0001"; // nobody real
 const OTHER_USER = "00000000-0000-4000-8000-0000000c0002"; // a second made-up person
 const NEW_ACCOUNT = "00000000-0000-4000-8000-0000000c0003"; // a fake sign-up, always rolled back
 const asTestUser = <T,>(work: () => Promise<T>) =>
-  auth.runAsVerifiedUser({ id: TEST_USER, email: null, timeZone: "America/Halifax" }, work);
+  auth.runAsVerifiedUser({ id: TEST_USER, email: null, timeZone: "America/New_York" }, work);
 
 const owner = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await owner.connect();

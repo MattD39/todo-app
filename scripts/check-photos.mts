@@ -50,7 +50,7 @@ const { ClaudeMeter, costOf } = await jiti.import<typeof import("../src/lib/clau
 
 const photosDir = path.join(root, "tests/schedule-photos");
 const NOW = { today: "2026-11-20", time: "10:00" }; // a Friday
-const TIME_ZONE = "America/Halifax";
+const TIME_ZONE = "America/New_York";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {

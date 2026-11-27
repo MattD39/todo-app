@@ -48,3 +48,6 @@ next-env.d.ts
 
 # your own test photos for npm run check:photos (never committed)
 /tests/schedule-photos/mine/
+
+# Claude Code personal settings (never commit)
+.claude/settings.local.json

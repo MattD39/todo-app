@@ -47,7 +47,7 @@ function check(name: string, ok: boolean, detail = "") {
 const TEST_USER = "00000000-0000-4000-8000-0000000b0001"; // nobody real
 const OTHER_USER = "00000000-0000-4000-8000-0000000b0002"; // a second made-up person
 const asTestUser = <T,>(work: () => Promise<T>) =>
-  auth.runAsVerifiedUser({ id: TEST_USER, email: null, timeZone: "America/Halifax" }, work);
+  auth.runAsVerifiedUser({ id: TEST_USER, email: null, timeZone: "America/New_York" }, work);
 
 const owner = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await owner.connect();

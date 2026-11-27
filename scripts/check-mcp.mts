@@ -143,7 +143,7 @@ console.log("\nPart 2: the tools, for a made-up test user (cleaned up afterwards
 const TEST_USER = "00000000-0000-4000-8000-00000000c0de"; // nobody real
 const OTHER_USER = "00000000-0000-4000-8000-00000000c0df"; // a second made-up person, for Part 3
 const TEST_PASS = "check-mcp-test-pass";
-const TIME_ZONE = "America/Halifax";
+const TIME_ZONE = "America/New_York";
 // The real tools behind the real "sign in first" wrapper, but with the test
 // user's pass accepted directly (Part 1 covers real passes).
 const handler = withMcpAuth(
