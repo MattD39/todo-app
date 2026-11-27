@@ -14,7 +14,8 @@
 //   - typing a saved name in any capitals uses the saved one;
 //   - another person's categories are never seen or changed;
 //   - the chip rule (g3): saved = while any task has it, one-off = only while
-//     an unfinished task has it; the task sheet lists only saved ones.
+//     an unfinished task has it; the task sheet lists only saved ones;
+//   - g4: Claude's save (Chat) and its Undo, checked again as from a browser.
 // Only the made-up people's rows are created and deleted; your own data is
 // never touched or shown. Exits with an error if any check fails.
 
@@ -32,6 +33,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const tasks = await jiti.import<typeof import("../src/lib/tasks.ts")>(path.join(root, "src/lib/tasks.ts"));
 const auth = await jiti.import<typeof import("../src/lib/auth.ts")>(path.join(root, "src/lib/auth.ts"));
+const changes = await jiti.import<typeof import("../src/lib/chat-changes.ts")>(path.join(root, "src/lib/chat-changes.ts"));
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -241,6 +243,61 @@ try {
   check(
     "finishing a one-off's last unfinished task removes its chip",
     !(await asTestUser(() => tasks.listCategories())).some((c) => c.name === "One-off open"),
+  );
+
+  // ─── g4: Claude's "Save it to your list?" (Chat's save + Undo) ────────────
+  // Through the same code the Chat uses (applyChanges / undoChanges).
+  await addCategory(TEST_USER, "Gym bag", false);
+  const gymBag = (await categoryOf(TEST_USER, "Gym bag"))[0].id;
+  await addTask(TEST_USER, "Pack it", gymBag);
+  const catNames = await asTestUser(() => tasks.listCategoryNames());
+  check(
+    "listCategoryNames: saved ones, and every name (one-offs too)",
+    catNames.saved.includes("Saved unused") && !catNames.saved.includes("Gym bag") && catNames.known.includes("Gym bag"),
+    JSON.stringify(catNames),
+  );
+  const cleaned = changes.cleanChanges([{ kind: "save-category", name: "  gym   BAG " }]);
+  check(
+    "a save sent back by the browser is checked again (spaces tidied)",
+    cleaned?.[0]?.kind === "save-category" && cleaned[0].name === "gym BAG",
+    JSON.stringify(cleaned),
+  );
+  check(
+    "…and a bad one is refused",
+    changes.cleanChanges([{ kind: "save-category", name: "" }]) === null &&
+      changes.cleanChanges([{ kind: "save-category", name: "x".repeat(41) }]) === null &&
+      changes.cleanUndos([{ kind: "unsave-category", name: 5 }]) === null,
+  );
+  let [result] = await asTestUser(() => changes.applyChanges(cleaned!));
+  check(
+    "Chat saves a one-off: it becomes saved, keeping its name and task",
+    result.ok && result.summary === "Save “Gym bag” to your categories" && (await categoryOf(TEST_USER, "Gym bag"))[0]?.saved === true,
+    JSON.stringify(result),
+  );
+  const undoGymBag = changes.cleanUndos([result.ok ? result.undo : null]);
+  let [undone] = await asTestUser(() => changes.undoChanges(undoGymBag!));
+  const afterUndo = await categoryOf(TEST_USER, "Gym bag");
+  check(
+    "Undo: it's a one-off again, still on its task",
+    undone.ok && afterUndo.length === 1 && afterUndo[0].saved === false && afterUndo[0].id === gymBag,
+    JSON.stringify({ undone, afterUndo }),
+  );
+  [result] = await asTestUser(() => changes.applyChanges([{ kind: "save-category", name: "Brand new", summary: "" }]));
+  check("Chat saves a brand-new name: a saved category is made", result.ok && (await categoryOf(TEST_USER, "Brand new"))[0]?.saved === true);
+  [undone] = await asTestUser(() => changes.undoChanges(changes.cleanUndos([result.ok ? result.undo : null])!));
+  check("Undo: the brand-new one (no tasks) is gone completely", undone.ok && (await categoryOf(TEST_USER, "Brand new")).length === 0);
+  [result] = await asTestUser(() => changes.applyChanges([{ kind: "save-category", name: "saved UNUSED", summary: "" }]));
+  check(
+    "saving one that's already saved: not saved again, says so",
+    !result.ok && /already on your list/.test(result.error),
+    JSON.stringify(result),
+  );
+  await addCategory(OTHER_USER, "Their secret", false);
+  [result] = await asTestUser(() => changes.applyChanges([{ kind: "save-category", name: "Their secret", summary: "" }]));
+  await asTestUser(() => changes.undoChanges([{ kind: "unsave-category", name: "Their secret", remove: true }]));
+  check(
+    "another person's category is never touched (saving the same name makes the test user their own)",
+    (await categoryOf(OTHER_USER, "Their secret"))[0]?.saved === false && (await categoryOf(TEST_USER, "Their secret")).length === 0,
   );
 
   check(

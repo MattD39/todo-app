@@ -18,7 +18,7 @@ _Screenshots coming soon._
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **What it does** | Tasks with due dates and times, priorities, categories, steps and repeats; Today, Upcoming, Calendar and Done views; installs on iPhone as a home-screen app                                |
 | **AI features**  | Claude suggests steps for a task, answers questions about a task, and chats about your whole list, adding, changing and ticking off tasks when you clearly ask (with Undo)                  |
-| **MCP server**   | Connect your own Claude to your list: 7 tools (read, add, change, tick off; no delete), standard OAuth sign-in, per-user database isolation                                                 |
+| **MCP server**   | Connect your own Claude to your list: 8 tools (read, add, change, tick off, save a category; no delete), standard OAuth sign-in, per-user database isolation                                                 |
 | **Safety**       | Every user's data is isolated by the database itself (Postgres row-level security); per-user limits on Claude use and on changes; prompt-injection defences; automated checks for all of it |
 | **Stack**        | Next.js 16 (React 19, TypeScript), Tailwind CSS 4, Supabase (Postgres + Auth), Prisma 7, Claude API (Claude Haiku 5.5), MCP (`mcp-handler`), Vercel                                         |
 
@@ -45,6 +45,7 @@ _Screenshots coming soon._
 | `update_task`     | Change only the fields asked for (moving the day keeps the time)                | change |
 | `clear_fields`    | Remove a date, time, category or repeat, only when explicitly asked             | change |
 | `complete_task`   | Tick off (a repeating task moves to its next date)                              | change |
+| `save_category`   | Save a category to your list, only after you say yes when Claude asks           | change |
 
 There is deliberately **no delete tool**. Change tools are marked as changing data, so Claude apps ask the user before using them. All dates use each user's own time zone.
 

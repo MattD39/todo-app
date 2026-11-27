@@ -6,6 +6,7 @@ import {
   applyChanges,
   cleanFields,
   describeAdd,
+  describeSave,
   describeUpdate,
   type ChatChange,
 } from "../chat-changes";
@@ -21,6 +22,7 @@ import {
 } from "../dates";
 import {
   getTask,
+  listCategoryNames,
   listHistory,
   listOpenTasks,
   MAX_CATEGORY,
@@ -99,7 +101,8 @@ export function registerTools(server: McpServer) {
       description:
         "Lists the user's open (not yet finished) tasks from their To-Do app, soonest due first, with each " +
         "task's id, due date and time, priority, category, repeat and how many steps are done. Use `show` to " +
-        "pick which ones (default all) and `category` to keep only one category. Dates are in the user's time zone.",
+        "pick which ones (default all) and `category` to keep only one category. Dates are in the user's time zone. " +
+        "Also lists the user's saved categories.",
       inputSchema: z.object({
         show: blankable(
           z.enum(["all", "today", "overdue", "upcoming", "no_due_date"]),
@@ -141,7 +144,8 @@ export function registerTools(server: McpServer) {
           tasks.length === 0
             ? `${which.join(" ")}: none.`
             : `${DATA_NOTE}\n\n${which.join(" ")} (${tasks.length}):\n${tasks.map((t) => taskLine(t, now)).join("\n")}`;
-        return text(`${header}\n\n${body}`);
+        const { saved } = await listCategoryNames();
+        return text(`${header}\n\n${body}\n\nSaved categories (the user's list): ${saved.join(", ") || "none"}.`);
       }),
   );
 
@@ -265,7 +269,8 @@ export function registerChangeTools(server: McpServer) {
         ),
         priority: blankable(PRIORITY).describe("Leave out for medium."),
         category: blankable(z.string().max(MAX_CATEGORY)).describe(
-          "A category name, ideally one the user already has.",
+          "A category name, only if the user asked for one: ideally one of their saved categories " +
+            "(list_open_tasks shows them). Any other name is a one-off for this task only.",
         ),
         repeat: blankable(REPEAT).describe(
           "How often it repeats. Leave out for a one-off task.",
@@ -395,6 +400,30 @@ export function registerChangeTools(server: McpServer) {
         return save({ kind: "complete", taskId: task.id, summary: "" });
       }),
   );
+
+  // Step g4: after add_task or update_task used a category that isn't saved,
+  // the answer tells Claude to ask "Save it to your list?"; this is the yes.
+  server.registerTool(
+    "save_category",
+    {
+      title: "Save a category to the list",
+      description:
+        "Puts a category on the user's saved category list (the list the To-Do app offers when picking a " +
+        "category). Use it ONLY when the user said yes to saving it, or asked you to save a category. A " +
+        "one-off category with that name keeps its tasks and becomes saved. Saved categories can be " +
+        "renamed or deleted in the app's Settings → Categories.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(MAX_CATEGORY).describe('The category\'s name, like "Groceries".'),
+      }),
+      annotations: ADDS,
+    },
+    async ({ name }, ctx) =>
+      asPassOwner(ctx.http?.authInfo, async () => {
+        const clean = name.trim().replace(/\s+/g, " ");
+        if (!clean) return text("Not saved: give the category a name.", true);
+        return save({ kind: "save-category", name: clean, summary: describeSave(clean) });
+      }),
+  );
 }
 
 // One of the user's open tasks, or why it can't be changed.
@@ -421,13 +450,19 @@ async function save(change: ChatChange): Promise<CallToolResult> {
   const [result] = await applyChanges([change]);
   if (!result.ok)
     return text(`Not saved: ${result.summary}. ${result.error}`, true);
+  if (change.kind === "save-category") {
+    return text(
+      `Done: ${result.summary}. The To-Do app now offers it when picking a category. ` +
+        "Tell the user briefly; they can rename or delete it in Settings → Categories.",
+    );
+  }
   const { now } = await clock();
   const id =
-    change.kind === "add"
-      ? result.undo.kind === "remove-added"
-        ? result.undo.taskId
-        : null
-      : change.taskId;
+    result.undo.kind === "remove-added"
+      ? result.undo.taskId
+      : change.kind === "update" || change.kind === "complete"
+        ? change.taskId
+        : null;
   const task = id ? await getTask(id) : null;
   const state = task
     ? task.done
@@ -435,7 +470,27 @@ async function save(change: ChatChange): Promise<CallToolResult> {
       : `\nThe task now: ${taskLine(task, now).slice(2)}`
     : "";
   return text(
-    `Done: ${result.summary}.${state}\n\n${DATA_NOTE}\n\n${AFTER_CHANGE}`,
+    `Done: ${result.summary}.${state}\n\n${DATA_NOTE}\n\n${AFTER_CHANGE}${await oneOffNote(change)}`,
+  );
+}
+
+// Step g4: if the change gave the task a category that isn't on the saved
+// list (so it's a one-off, just for this task), tells Claude to ask the user
+// whether to save it. Empty otherwise.
+async function oneOffNote(change: ChatChange): Promise<string> {
+  const name =
+    change.kind === "add"
+      ? change.task.category
+      : change.kind === "update"
+        ? change.changes.category
+        : null;
+  if (!name) return "";
+  const { saved } = await listCategoryNames();
+  if (saved.some((s) => s.toLowerCase() === name.toLowerCase())) return "";
+  return (
+    `\n\n“${name}” isn't one of the user's saved categories, so it was added as a one-off (just for this ` +
+    `task). Ask the user: "${name} isn't one of your saved categories. Save it to your list?" If they say ` +
+    "yes, use save_category. Don't save it unless they say yes."
   );
 }
 

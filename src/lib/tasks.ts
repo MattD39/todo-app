@@ -333,8 +333,11 @@ export async function listOneOffCategories(): Promise<{ id: string; name: string
 // "Save to list" in the task sheet, and Claude's save action (only after you
 // say yes). A one-off with that name (any capitals) becomes saved, keeping
 // its tasks; otherwise a new saved category is made. Returns its name and
-// whether it was already saved (then nothing changed).
-export async function saveCategory(name: unknown): Promise<{ name: string; alreadySaved: boolean }> {
+// whether it was already saved (then nothing changed), and whether it's
+// brand new (no task or one-off had that name; Claude's Undo uses this).
+export async function saveCategory(
+  name: unknown,
+): Promise<{ name: string; alreadySaved: boolean; created: boolean }> {
   await getCurrentUser(); // signed-out visitors are turned away before anything else
   const clean = cleanCategoryName(name);
   return asCurrentUser(async (tx, userId) => {
@@ -342,10 +345,10 @@ export async function saveCategory(name: unknown): Promise<{ name: string; alrea
       where: { userId, name: { equals: clean, mode: "insensitive" } },
       select: { id: true, name: true, saved: true },
     });
-    if (existing?.saved) return { name: existing.name, alreadySaved: true };
+    if (existing?.saved) return { name: existing.name, alreadySaved: true, created: false };
     if (existing) {
       await tx.category.update({ where: { id: existing.id, userId }, data: { saved: true } });
-      return { name: existing.name, alreadySaved: false };
+      return { name: existing.name, alreadySaved: false, created: false };
     }
     const created = await tx.category.upsert({
       where: { userId_name: { userId, name: clean } },
@@ -353,8 +356,42 @@ export async function saveCategory(name: unknown): Promise<{ name: string; alrea
       update: { saved: true },
       select: { name: true },
     });
-    return { name: created.name, alreadySaved: false };
+    return { name: created.name, alreadySaved: false, created: true };
   });
+}
+
+// Undo for Claude's "save it to your list" (step g4): takes the category off
+// the saved list again. Its tasks keep it, as a one-off. If saving had made
+// it brand new (`remove`) and still no task uses it, it's removed completely,
+// as if it was never saved. Nothing happens if it isn't saved any more.
+export async function unsaveCategory(name: unknown, remove: boolean): Promise<void> {
+  await getCurrentUser(); // signed-out visitors are turned away before anything else
+  const clean = cleanCategoryName(name);
+  await asCurrentUser(async (tx, userId) => {
+    const category = await tx.category.findFirst({
+      where: { userId, saved: true, name: { equals: clean, mode: "insensitive" } },
+      select: { id: true, _count: { select: { tasks: true } } },
+    });
+    if (!category) return;
+    if (remove && category._count.tasks === 0) {
+      await tx.category.deleteMany({ where: { id: category.id, userId } });
+    } else {
+      await tx.category.update({ where: { id: category.id, userId }, data: { saved: false } });
+    }
+  });
+}
+
+// For Claude (Chat and the To-Do connector): the saved list's names, and the
+// names of every category you have at all (saved or one-off, used or not).
+// "known" tells Claude whether shifts from a schedule photo have used Work
+// before, so it only asks "Save Work to your list?" the first time (g4).
+export type CategoryNames = { saved: string[]; known: string[] };
+
+export async function listCategoryNames(): Promise<CategoryNames> {
+  const rows = await asCurrentUser((tx, userId) =>
+    tx.category.findMany({ where: { userId }, select: { name: true, saved: true }, orderBy: { name: "asc" } }),
+  );
+  return { saved: rows.filter((r) => r.saved).map((r) => r.name), known: rows.map((r) => r.name) };
 }
 
 // Renames a saved category (its tasks follow, since they point at it). Only

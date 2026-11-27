@@ -190,8 +190,17 @@ try {
 
   const all = await listTools(handler, TEST_PASS);
   const names = all.map((t) => t.name).sort();
-  const expected = ["add_task", "clear_fields", "complete_task", "get_task", "list_finished", "list_open_tasks", "update_task"];
-  check("exactly the 7 planned tools, and no delete tool", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
+  const expected = [
+    "add_task",
+    "clear_fields",
+    "complete_task",
+    "get_task",
+    "list_finished",
+    "list_open_tasks",
+    "save_category",
+    "update_task",
+  ];
+  check("exactly the 8 planned tools, and no delete tool", JSON.stringify(names) === JSON.stringify(expected), names.join(", "));
   const readTools = ["get_task", "list_finished", "list_open_tasks"];
   check(
     "reading tools are marked read-only; changing tools aren't (so Claude apps ask first)",
@@ -262,6 +271,44 @@ try {
     "ticking a weekly task moves it on a week (in the user's time zone)",
     !ticked.isError && ticked.text.includes(addDays(today, 7)),
     ticked.text,
+  );
+
+  // Saved categories (g4). "check-cat" above was a one-off (nothing saved yet).
+  check(
+    "a category that isn't saved: the answer says it's a one-off and to ask \"Save it to your list?\"",
+    /one-off/.test(added.text) && /Save it to your list\?/.test(added.text) && /save_category/.test(added.text),
+    added.text,
+  );
+  const savedCat = async (name: string) =>
+    (await owner.query(`SELECT name, saved FROM "Category" WHERE "userId" = $1 AND lower(name) = lower($2)`, [TEST_USER, name]))
+      .rows;
+  check("…and it really is a one-off in the database", (await savedCat("check-cat"))[0]?.saved === false);
+  const saveIt = await call("save_category", { name: "CHECK-CAT" });
+  const rows = await savedCat("check-cat");
+  check(
+    "save_category saves the one-off (keeping its own capitals), and its task keeps it",
+    !saveIt.isError && rows.length === 1 && rows[0].saved === true && rows[0].name === "check-cat",
+    `${saveIt.text} ${JSON.stringify(rows)}`,
+  );
+  const again = await call("save_category", { name: "Check-Cat" });
+  check("saving it again: refused, it's already on the list", again.isError && /already on your list/.test(again.text), again.text);
+  const usesSaved = await call("add_task", { title: "Uses saved", category: "Check-cat" });
+  check(
+    "a saved category (any capitals): no question asked",
+    !usesSaved.isError && !/one-off/.test(usesSaved.text) && /category: check-cat/.test(usesSaved.text),
+    usesSaved.text,
+  );
+  const moveCat = await call("update_task", { task_id: idIn(usesSaved.text), category: "Brand new" });
+  check(
+    "update_task to a category that isn't saved asks too",
+    !moveCat.isError && /“Brand new” isn't one of the user's saved categories/.test(moveCat.text),
+    moveCat.text,
+  );
+  const listed = await call("list_open_tasks");
+  check(
+    "list_open_tasks lists the saved categories (not the one-offs)",
+    /Saved categories \(the user's list\): check-cat\./.test(listed.text),
+    listed.text,
   );
 
   // ─── Part 3: safety ────────────────────────────────────────────────────────

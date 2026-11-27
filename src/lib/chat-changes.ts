@@ -6,11 +6,13 @@ import {
   deleteTask,
   getTask,
   MAX_CATEGORY,
+  saveCategory,
   MAX_NOTES,
   MAX_TITLE,
   setTaskDone,
   TaskError,
   undoCompletion,
+  unsaveCategory,
   updateTask,
   type TaskChanges,
   type TaskDTO,
@@ -37,7 +39,10 @@ export const MAX_SAVED_PER_MESSAGE = Math.max(MAX_CHANGES_PER_MESSAGE, MAX_SHIFT
 export type ChatChange =
   | { kind: "add"; task: AddFields; summary: string; shift?: true } // shift: from a schedule photo (add_shift)
   | { kind: "update"; taskId: string; changes: TaskChanges; summary: string }
-  | { kind: "complete"; taskId: string; summary: string };
+  | { kind: "complete"; taskId: string; summary: string }
+  // Put a category on the saved list (save_category, step g4): only after the
+  // user says yes to "Save it to your list?".
+  | { kind: "save-category"; name: string; summary: string };
 
 export type AddFields = {
   title: string;
@@ -54,7 +59,8 @@ export type ChangeUndo =
   | { kind: "remove-added"; taskId: string } // an added task: remove it again
   | { kind: "restore"; taskId: string; changes: TaskChanges } // a changed task: old values
   | { kind: "untick"; taskId: string } // a one-off task that was ticked off
-  | { kind: "undo-tick"; completionId: string }; // one round of a repeating task
+  | { kind: "undo-tick"; completionId: string } // one round of a repeating task
+  | { kind: "unsave-category"; name: string; remove: boolean }; // take it off the saved list again
 
 export type ChangeResult =
   | { ok: true; summary: string; undo: ChangeUndo }
@@ -79,6 +85,10 @@ export function describeUpdate(task: TaskDTO, changes: TaskChanges): string {
   if (changes.category !== undefined) what.push(changes.category ? `category “${changes.category}”` : "no category");
   if (changes.repeat !== undefined) what.push(changes.repeat ? `repeats ${changes.repeat}` : "doesn't repeat");
   return `Change “${task.title}”: ${what.join(", ")}`;
+}
+
+export function describeSave(name: string): string {
+  return `Save “${name}” to your categories`;
 }
 
 export function describeComplete(task: TaskDTO): string {
@@ -159,6 +169,10 @@ export function cleanChanges(input: unknown): ChatChange[] | null {
       changes.push({ kind: "update", taskId: value.taskId, changes: fields, summary: "" });
     } else if (value.kind === "complete" && typeof value.taskId === "string") {
       changes.push({ kind: "complete", taskId: value.taskId, summary: "" });
+    } else if (value.kind === "save-category") {
+      const name = cleanCategory(value.name);
+      if (!name) return null;
+      changes.push({ kind: "save-category", name, summary: describeSave(name) });
     } else {
       return null;
     }
@@ -180,8 +194,15 @@ export async function applyChanges(changes: ChatChange[]): Promise<ChangeResult[
 }
 
 async function applyOne(change: ChatChange): Promise<ChangeResult> {
-  let summary = change.kind === "add" ? describeAdd(change.task) : "Change a task";
+  let summary =
+    change.kind === "add" ? describeAdd(change.task) : change.kind === "save-category" ? change.summary : "Change a task";
   try {
+    if (change.kind === "save-category") {
+      const saved = await saveCategory(change.name);
+      summary = describeSave(saved.name); // with its capitals as saved
+      if (saved.alreadySaved) throw new TaskError("It's already on your list.");
+      return { ok: true, summary, undo: { kind: "unsave-category", name: saved.name, remove: saved.created } };
+    }
     if (change.kind === "add") {
       const task = await createTask(change.task);
       return { ok: true, summary, undo: { kind: "remove-added", taskId: task.id } };
@@ -232,6 +253,10 @@ export function cleanUndos(input: unknown): ChangeUndo[] | null {
       undos.push({ kind: "untick", taskId: value.taskId });
     } else if (value.kind === "undo-tick" && typeof value.completionId === "string") {
       undos.push({ kind: "undo-tick", completionId: value.completionId });
+    } else if (value.kind === "unsave-category") {
+      const name = cleanCategory(value.name);
+      if (!name) return null;
+      undos.push({ kind: "unsave-category", name, remove: value.remove === true });
     } else {
       return null;
     }
@@ -250,6 +275,7 @@ export async function undoChanges(undos: ChangeUndo[]): Promise<UndoResult[]> {
       if (undo.kind === "remove-added") await deleteTask(undo.taskId);
       else if (undo.kind === "restore") await updateTask(undo.taskId, undo.changes);
       else if (undo.kind === "untick") await setTaskDone(undo.taskId, false);
+      else if (undo.kind === "unsave-category") await unsaveCategory(undo.name, undo.remove);
       else await undoCompletion(undo.completionId);
       results.push({ ok: true });
     } catch (error) {
@@ -263,6 +289,12 @@ export async function undoChanges(undos: ChangeUndo[]): Promise<UndoResult[]> {
     }
   }
   return results;
+}
+
+// A category name as sent: spaces tidied, 1 to MAX_CATEGORY characters, or null.
+export function cleanCategory(input: unknown): string | null {
+  const name = typeof input === "string" ? input.trim().replace(/\s+/g, " ") : "";
+  return name && name.length <= MAX_CATEGORY ? name : null;
 }
 
 function asRecord(input: unknown): Record<string, unknown> {

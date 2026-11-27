@@ -12,7 +12,7 @@ import {
 import type { ChatChange } from "@/lib/chat-changes";
 import { addDays, nowIn } from "@/lib/dates";
 import { cleanPhoto, PHOTO_ONLY_MESSAGE } from "@/lib/schedule-photo";
-import { listHistory, listOpenTasks } from "@/lib/tasks";
+import { listCategoryNames, listHistory, listOpenTasks } from "@/lib/tasks";
 import { getTimeZone } from "@/lib/timezone";
 import { startClaudeUse } from "@/lib/usage";
 
@@ -48,7 +48,11 @@ export async function POST(request: Request) {
     // Read the clock only after the login check (Next.js requires that order).
     const timeZone = await getTimeZone();
     const now = nowIn(timeZone);
-    const [open, history] = await Promise.all([listOpenTasks(), listHistory(addDays(now.today, -6), now.today)]);
+    const [open, history, categories] = await Promise.all([
+      listOpenTasks(),
+      listHistory(addDays(now.today, -6), now.today),
+      listCategoryNames(), // the saved list, for "Save it to your list?" (g4)
+    ]);
 
     // Counted last, just before Claude is asked, so a problem loading your
     // tasks doesn't use up one of your messages. Throws if a limit is reached.
@@ -56,7 +60,8 @@ export async function POST(request: Request) {
     const use = await startClaudeUse(photo ? "chat_photo" : "chat");
     const stop = stopWhenBrowserLeaves(request);
     const queue: ChatChange[] = [];
-    const reply = chatAboutTasks(turns, { open, history, now, timeZone }, stop.signal, queue, use.meter, photo);
+    const snapshot = { open, history, now, timeZone, categories };
+    const reply = chatAboutTasks(turns, snapshot, stop.signal, queue, use.meter, photo);
     return await streamTextResponse(withChanges(reply, queue), stop, use);
   } catch (error) {
     // claudeErrorResponse re-throws the "go to /login" redirect so Next.js can send it.

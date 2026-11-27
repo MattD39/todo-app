@@ -626,3 +626,25 @@ Short entries, added as each new step is finished and committed.
     below down, so the keyboard can't hide it; Esc closes just the list.
   - **Testing:** 5 new free checks (25 in all, passed 3 times), the other
     free checks, and 17 tests in the app.
+
+- **Nov 26 — Saved categories, part 4: Claude asks before saving.** When
+  Chat or my own Claude (through the To-Do connector) gives a task a category
+  that isn't on my saved list, the task gets it as a one-off, and Claude asks
+  once: "Groceries isn't one of your saved categories. Save it to your
+  list?" Only a yes saves it, through a new `save_category` tool (the
+  connector now has 8 tools; still no delete). In Chat the save gets a ✓
+  line with Undo, which takes it off the list again (its tasks keep it).
+  - **Reliable, not left to Claude:** the app itself checks each category
+    against the saved list and tells Claude when to ask, once per category
+    per reply. Claude also now sees the saved list, so "fitness" uses my
+    saved "Fitness".
+  - **Decision (mine): shifts ask about Work only the first time.** A
+    schedule photo's shifts always get Work. The app asks to save it only if
+    I've never had a Work category at all; after the first shifts, Work
+    exists as a one-off, so later photos just use it. (If I delete Work in
+    Settings, the next photo asks once more.)
+  - **Testing:** new free checks for the connector (36 in all), the Chat
+    save and Undo in the database (34 in all), and 17 for when Claude is told
+    to ask; one paid run with Claude ($0.03) where all 13 new checks passed
+    (one older, known-flaky check on my own photo didn't, unrelated); the
+    database privacy tests; and 9 tests in the app.

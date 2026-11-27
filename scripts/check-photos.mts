@@ -473,6 +473,76 @@ check(
   older.length === 3 && older[0].hadPhoto === true && older[0].text === sp.PHOTO_ONLY_MESSAGE,
 );
 
+// ─── g4: one-off categories and "Save it to your list?" (free) ───────────────
+console.log("\ng4: one-off categories (free)\n");
+{
+  const cats = (saved: string[], oneOffs: string[] = []) => ({ saved, known: [...saved, ...oneOffs].sort() });
+  const labelled = new Map([["T1", task("t1", "Buy milk")]]);
+  const asks = (m: string) => /Save it to your list\?/.test(m) || /Save \S+ to your list\?/.test(m);
+  const msg = (c: Anthropic.ToolUseBlock, q: ChatChange[], categories?: ReturnType<typeof cats>, today = NOW.today) =>
+    ai.queueChange(c, labelled, q, today, [], undefined, categories).message;
+
+  let q: ChatChange[] = [];
+  check(
+    "add_task with a saved category (any capitals): no question",
+    !asks(msg(call("add_task", { title: "Run", category: "fitness" }), q, cats(["Fitness"]))),
+  );
+  q = [];
+  let m = msg(call("add_task", { title: "Buy bread", category: "Groceries" }), q, cats(["Fitness"]));
+  check("add_task with a category that isn't saved: tells Claude to ask \"Save it to your list?\"", asks(m) && /one-off/.test(m), m);
+  m = msg(call("add_task", { title: "Buy eggs", category: "groceries" }), q, cats(["Fitness"]));
+  check("…but only once per category in one reply", !asks(m), m);
+  check(
+    "…and a one-off the user already has asks too (only shifts ask just the first time)",
+    asks(msg(call("add_task", { title: "Buy jam", category: "Shop" }), [], cats(["Fitness"], ["Shop"]))),
+  );
+  check(
+    "update_task to a category that isn't saved asks too",
+    asks(msg(call("update_task", { task: "T1", category: "Groceries" }), [], cats(["Fitness"]))),
+  );
+  check(
+    "older checks with no category list: no question (unchanged behaviour)",
+    !asks(msg(call("add_task", { title: "Buy bread", category: "Groceries" }), [], undefined)),
+  );
+
+  // Shifts (category Work): ask the first time only.
+  q = [];
+  m = msg(shiftCall("2026-11-23", "Monday"), q, cats(["Fitness"]));
+  check("first shifts ever, no Work category at all: asks \"Save Work to your list?\"", /Save Work to your list\?/.test(m), m);
+  m = msg(shiftCall("2026-11-24", "Tuesday"), q, cats(["Fitness"]));
+  check("…once per reply, not for every shift", !asks(m), m);
+  check(
+    "Work used before as a one-off (the user said no): later shifts don't ask",
+    !asks(msg(shiftCall("2026-11-23", "Monday"), [], cats(["Fitness"], ["Work"]))),
+  );
+  check("Work saved: shifts don't ask", !asks(msg(shiftCall("2026-11-23", "Monday"), [], cats(["work"]))));
+  check(
+    "…but a normal task put in an unsaved Work still asks",
+    asks(msg(call("add_task", { title: "Email boss", category: "Work" }), [], cats(["Fitness"], ["Work"]))),
+  );
+
+  // save_category
+  q = [];
+  let r = ai.queueChange(call("save_category", { name: "  groceries " }), labelled, q, NOW.today, [], undefined, cats([], ["Groceries"]));
+  check(
+    "save_category queues saving it, with the capitals of the one-off they already have",
+    r.ok && q.length === 1 && q[0].kind === "save-category" && q[0].name === "Groceries",
+    JSON.stringify(q),
+  );
+  r = ai.queueChange(call("save_category", { name: "Groceries" }), labelled, q, NOW.today, [], undefined, cats([], ["Groceries"]));
+  check("…asking twice queues it once", q.length === 1, JSON.stringify(q));
+  r = ai.queueChange(call("save_category", { name: "FITNESS" }), labelled, [], NOW.today, [], undefined, cats(["Fitness"]));
+  check("…already saved: refused, says so", !r.ok && /already on the user's saved list/.test(r.message), r.message);
+  r = ai.queueChange(call("save_category", { name: "  " }), labelled, [], NOW.today, [], undefined, cats([]));
+  check("…a blank name is refused", !r.ok);
+  m = msg(call("add_task", { title: "Buy bread", category: "Groceries" }), q, cats([], ["Groceries"]));
+  check("an add after save_category for that same category in the reply: no question", !asks(m), m);
+  check(
+    "\"I'll save Groceries to your list.\" counts as a promise (the safety net catches a missed tool call)",
+    ai.unkeptPromise("I'll save Groceries to your list.") !== null,
+  );
+}
+
 // ─── Part 2: Claude reads the made-up schedules ──────────────────────────────
 
 // Shrinks a photo the way the phone will (longest side 2000 px, JPEG), then
@@ -501,11 +571,12 @@ async function ask(
   photo: ChatPhoto | null,
   open: TaskDTO[] = [task("m1", "Buy milk")],
   finished: TaskDTO[] = [],
+  categories?: { saved: string[]; known: string[] }, // g4: the saved list (left out = older checks)
 ): Promise<Result> {
   const meter = new ClaudeMeter();
   const queue: ChatChange[] = [];
   let reply = "";
-  const snapshot = { open, history: { done: finished, ticks: [] }, now: NOW, timeZone: TIME_ZONE };
+  const snapshot = { open, history: { done: finished, ticks: [] }, now: NOW, timeZone: TIME_ZONE, categories };
   for await (const piece of ai.chatAboutTasks(turns, snapshot, new AbortController().signal, queue, meter, photo)) {
     reply += piece;
   }
@@ -568,6 +639,42 @@ if (process.argv.includes("--free")) {
     `${lastMeter?.cacheReadTokens ?? 0} tokens read from cache`,
   );
 
+  // g4. Categories in normal chat: a one-off asks "Save it to your list?",
+  // "yes" saves it, a saved one asks nothing.
+  const myCats = { saved: ["Errands", "Fitness", "Work"], known: ["Errands", "Fitness", "Work"] };
+  console.log('\ng4-1. "Add buy bread to my Groceries category." (Groceries isn\'t saved)');
+  const breadAsk = "Add buy bread to my Groceries category.";
+  r = await ask([user(breadAsk)], null, [task("d1", "Call the dentist")], [], myCats);
+  const bread = r.queue.find((c) => c.kind === "add");
+  check(
+    "adds the task with Groceries",
+    r.queue.length === 1 && bread?.kind === "add" && bread.task.category?.toLowerCase() === "groceries",
+    JSON.stringify(r.queue),
+  );
+  check("asks whether to save Groceries to their list", /save/i.test(r.reply) && /\?/.test(r.reply), r.reply);
+  const askedReply = r.reply;
+  console.log('\ng4-2. Then "yes"');
+  r = await ask(
+    [user(breadAsk), { role: "assistant", text: askedReply, changes: [{ summary: bread ? bread.summary : "Add", status: "saved" }] }, user("yes")],
+    null,
+    [task("d1", "Call the dentist"), task("b1", "Buy bread", { category: { id: "c1", name: "Groceries" } })],
+    [],
+    { ...myCats, known: [...myCats.known, "Groceries"].sort() },
+  );
+  check(
+    "saves Groceries to the list, and nothing else",
+    r.queue.length === 1 && r.queue[0].kind === "save-category" && r.queue[0].name === "Groceries",
+    JSON.stringify(r.queue),
+  );
+  console.log('\ng4-3. "Add a gym session tomorrow in fitness." (Fitness is saved)');
+  r = await ask([user("Add a gym session tomorrow in fitness.")], null, [task("d1", "Call the dentist")], [], myCats);
+  const gym = r.queue[0];
+  check(
+    "uses the saved Fitness, asks nothing about saving",
+    r.queue.length === 1 && gym.kind === "add" && gym.task.category?.toLowerCase() === "fitness" && !/save/i.test(r.reply),
+    `${JSON.stringify(r.queue)} | ${r.reply}`,
+  );
+
   // 1. A clear week with dates.
   let photo =await scenario("1. A clear week with dates", "1-clear-week.png");
   const clearWeek = [
@@ -584,6 +691,19 @@ if (process.argv.includes("--free")) {
     same(r.queue, clearWeek),
     JSON.stringify(shiftsOf(r.queue)),
   );
+
+  // g4. The same photo for someone who has never had a Work category: the
+  // shifts are added (Work as a one-off) and Claude asks once to save Work.
+  console.log("\n1-g4a. Same photo, first shifts ever (no Work category at all)");
+  const noWork = { saved: ["Errands", "Fitness"], known: ["Errands", "Fitness"] };
+  r = await ask([user("Add these shifts please.")], photo, undefined, [], noWork);
+  check("still adds the 5 shifts", same(r.queue, clearWeek), JSON.stringify(shiftsOf(r.queue)));
+  check("asks to save Work to their list (once)", sentencesWith(r.reply, /save .*work|work.*save/i).length === 1, r.reply);
+  check("doesn't save it without a yes", !r.queue.some((c) => c.kind === "save-category"));
+  console.log("\n1-g4b. Same photo, Work already used once as a one-off (they said no before)");
+  r = await ask([user("Add these shifts please.")], photo, undefined, [], { ...noWork, known: [...noWork.known, "Work"] });
+  check("adds the 5 shifts", same(r.queue, clearWeek), JSON.stringify(shiftsOf(r.queue)));
+  check("doesn't ask about saving Work again", !/save/i.test(r.reply) && !/saved categor/i.test(r.reply), r.reply);
 
   // 1b. The same photo when Monday's shift is already on the list.
   console.log("\n1b. Same photo, Monday's shift already on the list");
