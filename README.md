@@ -4,7 +4,25 @@ A personal to-do app (web + iPhone home-screen app) with Claude built in, and an
 
 **Live:** https://mattd-tasks.vercel.app (sign-ups are currently closed)
 
-_Screenshots coming soon._
+<table>
+  <tr>
+    <td><img src="docs/screenshots/today.png" width="200" alt="Today screen: an overdue task, three due today with times and repeats, and tasks with no date, each with its priority and category"></td>
+    <td><img src="docs/screenshots/task.png" width="200" alt="Editing a task: six steps suggested by Claude, one ticked off, with Suggest steps and Ask Claude below"></td>
+    <td><img src="docs/screenshots/chat.png" width="200" alt="Chat tab: asked to add a task and tick one off, Claude does both and shows each change with an Undo button"></td>
+    <td><img src="docs/screenshots/calendar.png" width="200" alt="Calendar: December with dots on days that have tasks, and the picked day's task listed below"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Today</b><br>overdue first, then by priority</td>
+    <td align="center"><b>Claude suggests steps</b></td>
+    <td align="center"><b>Chat changes tasks</b><br>each with Undo</td>
+    <td align="center"><b>Calendar</b><br>faint dots = later repeats</td>
+  </tr>
+</table>
+
+<p>
+  <img src="docs/screenshots/claude-mcp.png" width="600" alt="claude.ai answering 'What's due this week?' by calling the To-Do app's MCP server: overdue, today and coming-up tasks listed by day"><br>
+  <em>My own Claude (claude.ai) answering "What's due this week?" through the app's MCP server.</em>
+</p>
 
 > **How it was built:** I designed and directed this project with **Claude Code** (Anthropic's AI coding agent). I set the goals, made the product and security decisions, reviewed each step and tested every feature by hand. Claude Code wrote the code to my plans, one small step at a time.
 >
@@ -18,7 +36,7 @@ _Screenshots coming soon._
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **What it does** | Tasks with due dates and times, priorities, categories, steps and repeats; Today, Upcoming, Calendar and Done views; installs on iPhone as a home-screen app                                |
 | **AI features**  | Claude suggests steps for a task, answers questions about a task, and chats about your whole list, adding, changing and ticking off tasks when you clearly ask (with Undo)                  |
-| **MCP server**   | Connect your own Claude to your list: 8 tools (read, add, change, tick off, save a category; no delete), standard OAuth sign-in, per-user database isolation                                                 |
+| **MCP server**   | Connect your own Claude to your list: 8 tools (read, add, change, tick off, save a category; no delete), standard OAuth sign-in, per-user database isolation                                |
 | **Safety**       | Every user's data is isolated by the database itself (Postgres row-level security); per-user limits on Claude use and on changes; prompt-injection defences; automated checks for all of it |
 | **Stack**        | Next.js 16 (React 19, TypeScript), Tailwind CSS 4, Supabase (Postgres + Auth), Prisma 7, Claude API (Claude Haiku 5.5), MCP (`mcp-handler`), Vercel                                         |
 
@@ -83,14 +101,21 @@ There is deliberately **no delete tool**. Change tools are marked as changing da
 
 Besides hand-testing every feature, the project has automated checks:
 
-| Command                    | What it proves                                                                                                                            | Cost                |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| `npm run test:rls`         | The database itself keeps users apart: no reading, changing, creating or handing over other users' rows, even with no filter in the query | free                |
-| `npm run check:mcp`        | MCP sign-in refuses missing, fake and forged passes; every tool works; another user's task can't be touched even by id; change limits     | free                |
-| `npm run check:limits`     | Claude usage limits and spending cap, including two requests at the same instant                                                          | free                |
-| `npm run check:errors`     | Each kind of Claude failure gets the right message                                                                                        | free                |
-| `npm run check:chat-tools` | Real Claude requests: only asked-for fields change, vague replies change nothing, injected instructions in task text are ignored          | fractions of a cent |
-| `npm run check:claude`     | A basic live Claude call and an injection test                                                                                            | fractions of a cent |
+| Command                          | What it proves                                                                                                                                                                              | Cost                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `npm run test:rls`               | The database itself keeps users apart: no reading, changing, creating or handing over other users' rows, even with no filter in the query                                                   | free                                                      |
+| `npm run check:mcp`              | MCP sign-in refuses missing, fake and forged passes; every tool works; another user's task can't be touched even by id; change limits                                                       | free                                                      |
+| `npm run check:limits`           | Claude usage limits and spending cap, including two requests at the same instant                                                                                                            | free                                                      |
+| `npm run check:errors`           | Each kind of Claude failure gets the right message                                                                                                                                          | free                                                      |
+| `npm run check:chat-tools`       | Real Claude requests: only asked-for fields change, vague replies change nothing, injected instructions in task text are ignored                                                            | fractions of a cent                                       |
+| `npm run check:claude`           | A basic live Claude call and an injection test                                                                                                                                              | fractions of a cent                                       |
+| `npm run check:photos`           | Photo to schedule: only real photos under the size limit, and the shift rules (weekday matches the date, no past days, no duplicates, at most 20); then Claude reads made-up work schedules | free part (`-- --free`), then about half a cent per photo |
+| `npm run check:batch-delete`     | Deleting many tasks at once: each lands in Recently deleted, Undo brings the whole batch back, another user's tasks are never touched                                                       | free                                                      |
+| `npm run check:saved-categories` | Saved categories: adding, renaming and deleting follow their rules; another user's categories are never seen or changed                                                                     | free                                                      |
+| `npm run check:categories`       | The category filter chips: which are on, what tapping does, which tasks show                                                                                                                | free                                                      |
+| `npm run check:order`            | List order: priority, then due date and time, then oldest added, then A to Z with numbers read as numbers ("Shift 2" before "Shift 10")                                                     | free                                                      |
+| `npm run check:added-time`       | Every task from one Chat reply shares one "added" moment; a restored task keeps its original place                                                                                          | free                                                      |
+| `npm run check:added-message`    | After adding a task, the right message: "Added to Upcoming", "Added for Fri, Dec 4", "hidden by your filter"                                                                                | free                                                      |
 
 The database checks use made-up test users and clean up after themselves.
 

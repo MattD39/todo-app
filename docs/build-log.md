@@ -797,3 +797,16 @@ Short entries, added as each new step is finished and committed.
   - **Unchanged:** the title box still uses two Enters (the first closes the
     iPhone keyboard), and Enter in Notes starts a new line.
   - **Testing:** 9 tests in the app.
+
+- **Nov 27 — README: screenshots and an up-to-date Testing list.** The
+  README now opens with four iPhone screenshots (Today, Claude suggesting
+  steps, Chat changing tasks with Undo, Calendar) and one of my own Claude
+  on claude.ai answering "What's due this week?" through the app's MCP
+  server. The Testing table now lists all 13 automated checks.
+  - **Made-up tasks only:** the pictures use a demo set of tasks added for
+    the shoot, so nothing personal is shown.
+  - **Privacy check:** every picture was checked before committing. The
+    claude.ai one was cropped to just the conversation, because the sidebar
+    showed my account name and other chat titles.
+  - **Small files:** the pictures were shrunk from about 1.3 MB to 210 KB in
+    total, so the page loads quickly.
