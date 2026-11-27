@@ -681,3 +681,18 @@ Short entries, added as each new step is finished and committed.
     part of the screen, the same way the task editor already does.
   - **Lesson:** keyboard behaviour can only be tested on the phone itself;
     the computer tests passed because a computer has no on-screen keyboard.
+
+- **Nov 27 — Send always jumps to the newest message.** On the iPhone, if I
+  had scrolled up a little and then pressed Send, the chat stayed put: my
+  message peeked in at the bottom and Claude's reply came in off-screen
+  until I scrolled down myself. (Also: Chat text selection on the iPhone
+  became smooth after the keyboard fix, so the planned selection fix wasn't
+  needed.)
+  - **Cause → fix:** after a flick, iPhone keeps the messages gliding for a
+    moment. That glide ignored the app's jump to the bottom, and because the
+    app treated any upward movement as "you scrolled up", the glide also
+    switched off following the reply. Now pressing Send stops any glide and
+    jumps to the bottom, and only my own scrolling (finger, mouse wheel,
+    scroll bar) can switch following off.
+  - **Kept:** scrolling up while a reply is coming in still stops it
+    following, as before.

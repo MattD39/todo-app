@@ -78,9 +78,15 @@ export function Chat() {
   // scroll back down (or send a message) and it follows again.
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useFollowBottom(scrollRef);
+  const jumpRef = useRef(false); // you just pressed Send: go to the bottom, whatever was happening
   const lastMessage = messages.at(-1);
   useEffect(() => {
-    if (followRef.current) scrollToBottom(scrollRef.current);
+    if (jumpRef.current) {
+      jumpRef.current = false;
+      jumpToBottom(scrollRef.current);
+    } else if (followRef.current) {
+      scrollToBottom(scrollRef.current);
+    }
   }, [followRef, messages.length, lastMessage, error]);
 
   // The message to offer Try again / Edit for: its reply was stopped, or it wasn't sent.
@@ -95,6 +101,7 @@ export function Chat() {
     setEditingStopped(false);
     setPhotoNote("");
     followRef.current = true; // you just sent something: show the reply
+    jumpRef.current = true;
     void sendChat(text, options);
   }
 
@@ -530,9 +537,25 @@ function scrollToBottom(el: HTMLElement | null) {
   if (el) el.scrollTop = el.scrollHeight;
 }
 
+// The same, after you press Send. On iPhone the messages can still be gliding
+// from a flick a moment ago, and a glide ignores a jump. Switching scrolling
+// off for a moment stops the glide, so the jump lands.
+function jumpToBottom(el: HTMLElement | null) {
+  if (!el) return;
+  el.style.overflowY = "hidden";
+  el.scrollTop = el.scrollHeight;
+  requestAnimationFrame(() => {
+    el.style.overflowY = "";
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
 // Whether the chat should follow new text. Becomes false when you scroll up,
-// true again when you're back near the bottom. (A reply growing doesn't move
-// the messages, so only real scrolling changes it.) When the messages area
+// true again when you're back near the bottom. Only your own scrolling (a
+// finger, the mouse wheel, dragging the scroll bar) can switch it off: not the
+// app's own jumps, and not the glide that carries on after you lift your
+// finger, which could otherwise switch it off just after you press Send. When
+// the messages area
 // gets shorter (the iPhone keyboard coming up) while following, it stays at
 // the bottom, so the newest message isn't hidden.
 function useFollowBottom(ref: React.RefObject<HTMLElement | null>) {
@@ -540,21 +563,44 @@ function useFollowBottom(ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    let touching = false;
+    let mouseDown = false;
+    let wheelUntil = 0;
     let lastY = el.scrollTop;
     const onScroll = () => {
       const y = el.scrollTop;
       const nearBottom = el.clientHeight + y >= el.scrollHeight - 80;
+      const yours = touching || mouseDown || Date.now() < wheelUntil;
       if (nearBottom) follow.current = true;
-      else if (y < lastY) follow.current = false; // you scrolled up
+      else if (yours && y < lastY) follow.current = false; // you scrolled up
       lastY = y;
     };
+    const onTouchStart = () => (touching = true);
+    const onTouchEnd = () => (touching = false);
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse") mouseDown = true; // e.g. dragging the scroll bar
+    };
+    const onPointerUp = () => (mouseDown = false);
+    const onWheel = () => (wheelUntil = Date.now() + 300);
     const resized = new ResizeObserver(() => {
       if (follow.current) scrollToBottom(el);
     });
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd);
+    el.addEventListener("touchcancel", onTouchEnd);
+    el.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("wheel", onWheel, { passive: true });
     resized.observe(el);
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("wheel", onWheel);
       resized.disconnect();
     };
   }, [ref]);
