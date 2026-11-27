@@ -456,7 +456,11 @@ function cleanCategoryName(name: unknown): string {
 
 // ─── Writing ─────────────────────────────────────────────────────────────────
 
-export async function createTask(input: NewTaskInput): Promise<TaskDTO> {
+// `addedAt`: the "added" time to give it (the list order uses it). Chat passes
+// one time for every task from the same reply, so they count as added at the
+// same moment and sort A to Z ("Shift 2" before "Shift 10"). Left out: now.
+// (Only server code can pass it; the app's own Add button never does.)
+export async function createTask(input: NewTaskInput, { addedAt }: { addedAt?: Date } = {}): Promise<TaskDTO> {
   await getCurrentUser(); // signed-out visitors are turned away before anything else
   const title = cleanTitle(input.title);
   const dueDate = cleanDate(input.dueDate);
@@ -478,6 +482,7 @@ export async function createTask(input: NewTaskInput): Promise<TaskDTO> {
         dueTime,
         repeat,
         categoryId: await categoryIdFor(tx, userId, input.category),
+        ...(addedAt ? { createdAt: addedAt } : {}),
         subtasks: {
           create: steps.map((step, position) => ({ ...step, position })),
         },

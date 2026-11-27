@@ -717,3 +717,20 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** a new free check (18 cases, passed 3 times; breaking the
     rule on purpose made 6 fail, so it really checks), the other free
     checks, and 9 tests in the app.
+
+- **Nov 27 — New list order, part 2: one Chat reply = one moment.** Chat
+  saved the tasks from one reply one after another, a few milliseconds
+  apart, so "added at the same moment" almost never happened and Claude's
+  saving order decided. Now every task added in one Chat reply (including
+  the shifts from a schedule photo) gets the same "added" time, so the
+  number-aware A–Z rule puts them in order: Shift 1, Shift 2, Shift 10.
+  - **Decision (mine): connector adds stay separate.** My own Claude adds
+    one task per call through the connector, so each keeps its own time, in
+    the order it was added.
+  - **Restore already worked:** every way of bringing a task back (Restore,
+    Restore all, Undo after a delete or a batch delete) already kept its
+    original "added" time, so a restored task goes back to its old place
+    instead of acting new. A check now proves it.
+  - **Testing:** a new free check with a made-up test user (11 checks,
+    passed 3 times; breaking the change on purpose made 2 fail), the privacy
+    tests and the other free checks, and 5 tests in the app.

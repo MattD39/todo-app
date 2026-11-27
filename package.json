@@ -21,6 +21,7 @@
     "check:batch-delete": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-batch-delete.mts",
     "check:categories": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-categories.mts",
     "check:order": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-order.mts",
+    "check:added-time": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-added-time.mts",
     "check:saved-categories": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-saved-categories.mts"
   },
   "dependencies": {

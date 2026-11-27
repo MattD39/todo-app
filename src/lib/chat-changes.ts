@@ -185,15 +185,20 @@ export function cleanChanges(input: unknown): ChatChange[] | null {
 // Saves each change in order. One failing doesn't stop the others; each
 // result says how it went, with a description worked out here (not taken
 // from the browser) and what Undo needs.
+//
+// Every task added in one go (one Chat reply) gets the same "added" time, so
+// they count as added at the same moment in the list order. (The connector
+// saves one change per call, so its tasks each get their own time.)
 export async function applyChanges(changes: ChatChange[]): Promise<ChangeResult[]> {
   const results: ChangeResult[] = [];
+  const addedAt = new Date();
   for (const change of changes.slice(0, MAX_SAVED_PER_MESSAGE)) {
-    results.push(await applyOne(change));
+    results.push(await applyOne(change, addedAt));
   }
   return results;
 }
 
-async function applyOne(change: ChatChange): Promise<ChangeResult> {
+async function applyOne(change: ChatChange, addedAt: Date): Promise<ChangeResult> {
   let summary =
     change.kind === "add" ? describeAdd(change.task) : change.kind === "save-category" ? change.summary : "Change a task";
   try {
@@ -204,7 +209,7 @@ async function applyOne(change: ChatChange): Promise<ChangeResult> {
       return { ok: true, summary, undo: { kind: "unsave-category", name: saved.name, remove: saved.created } };
     }
     if (change.kind === "add") {
-      const task = await createTask(change.task);
+      const task = await createTask(change.task, { addedAt });
       return { ok: true, summary, undo: { kind: "remove-added", taskId: task.id } };
     }
 
