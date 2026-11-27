@@ -1,5 +1,5 @@
 import type { HistoryDTO, TaskDTO, TickDTO } from "./tasks";
-import { addDays, addMonths, dayOf, isOverdue, type Now } from "./dates";
+import { addDays, addMonths, dayOf, formatDay, isOverdue, type Now } from "./dates";
 
 // Sorting tasks into the sections each screen shows. Pure functions (no
 // database, no clock of their own) so they're easy to test.
@@ -101,6 +101,39 @@ function compareDue(aDate: string | null, aTime: string | null, bDate: string | 
   if (!aTime) return 1;
   if (!bTime) return -1;
   return compareText(aTime, bTime);
+}
+
+// ─── Where a task you just added shows up ───────────────────────────────────
+
+// The screens with the Add task button.
+export type AddScreen = "today" | "upcoming" | "calendar" | "done";
+
+// What the new task's row looks like to the screen you added it from.
+//   message: a short note at the bottom when you won't see it here
+//            ("Added to Upcoming"), or null when it's right here.
+//   glow:    true when it's on this screen, so it can be highlighted.
+// The other screen's message wins over the filter's, because that tells you
+// where to go. On Done, new tasks never show, so it just says where they went.
+export function addedTaskMessage(
+  task: { dueDate: string | null; category: string | null },
+  where: { screen: AddScreen; today: string; picked: string[]; calendarDay: string },
+): { message: string | null; glow: boolean } {
+  const { screen, today, picked, calendarDay } = where;
+  const due = task.dueDate;
+  // Today shows overdue, due today and no-date tasks; Upcoming shows the rest.
+  const onToday = !due || due <= today;
+
+  let elsewhere: string | null = null;
+  if (screen === "today") elsewhere = onToday ? null : "Added to Upcoming";
+  else if (screen === "upcoming") elsewhere = onToday ? "Added to Today" : null;
+  else if (screen === "calendar") elsewhere = !due ? "Added to Today" : due === calendarDay ? null : `Added for ${formatDay(due)}`;
+  else elsewhere = onToday ? "Added to Today" : "Added to Upcoming";
+  if (elsewhere) return { message: elsewhere, glow: false };
+
+  if (picked.length > 0 && !(task.category && picked.includes(task.category))) {
+    return { message: "Added · hidden by your filter", glow: false };
+  }
+  return { message: null, glow: true };
 }
 
 // ─── Category chips (several can be on at once) ─────────────────────────────

@@ -734,3 +734,17 @@ Short entries, added as each new step is finished and committed.
   - **Testing:** a new free check with a made-up test user (11 checks,
     passed 3 times; breaking the change on purpose made 2 fail), the privacy
     tests and the other free checks, and 5 tests in the app.
+
+- **Nov 27 — New list order, part 3a: "Added to …" message.** A new task
+  can land on a screen you're not looking at, so it seemed to vanish. Now,
+  after you add a task with Add task, a short message at the bottom says
+  where it went when it isn't on your screen: "Added to Upcoming", "Added
+  to Today", "Added for Fri, Dec 4" on the Calendar, or "Added · hidden by
+  your filter" when the category chips hide it. If both are true, the other
+  screen's message wins, because that tells you where to look.
+  - **Only your own adds:** editing a task and Chat's changes never show it.
+  - **One rule:** a single plain function decides the message, so every
+    screen agrees, and it can be tested on its own.
+  - **Testing:** a new free check (28 cases, all passed; breaking the rule on
+    purpose made 8 fail, so it really checks), the other free checks, and
+    12 tests in the app.

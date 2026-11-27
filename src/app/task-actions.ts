@@ -48,7 +48,10 @@ import {
 // person's tasks.
 
 export type ActionResult = { error: string | null };
-export type SaveTaskState = { error: string | null; savedAt: number | null };
+// added: set only when a NEW task was saved from the Add task sheet, so the
+// screen can say where it went ("Added to Upcoming"). Edits leave it out.
+export type AddedTask = { id: string; dueDate: string | null; category: string | null };
+export type SaveTaskState = { error: string | null; savedAt: number | null; added?: AddedTask };
 
 // Saves the task editor form. With an id it edits that task; without one it
 // adds a new task.
@@ -81,8 +84,13 @@ export async function saveTask(_prev: SaveTaskState, formData: FormData): Promis
   } catch {
     return { error: "Something went wrong with the steps.", savedAt: null };
   }
-  const { error } = await run("save", () => createTask({ ...fields, steps }));
-  return { error, savedAt: error ? null : Date.now() };
+  const { error, value } = await run("save", () => createTask({ ...fields, steps }));
+  if (error || !value) return { error, savedAt: null };
+  return {
+    error: null,
+    savedAt: Date.now(),
+    added: { id: value.id, dueDate: value.dueDate, category: value.category?.name ?? null },
+  };
 }
 
 // Steps on a task that's already saved change straight away, one at a time.

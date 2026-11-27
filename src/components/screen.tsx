@@ -99,6 +99,8 @@ function ScreenFrame({ tab, data, children }: { tab: Tab; data: ScreenData; chil
       savedCategories={data.savedCategories}
       defaultCategory={defaultCategory(data.picked)}
       today={data.now.today}
+      screen={tab === "chat" ? null : tab}
+      picked={data.picked}
       showAddButton={tab !== "chat"} // it would sit on top of the chat's Send button
       enterToAdd={tab === "today" || tab === "upcoming" || tab === "calendar"}
     >

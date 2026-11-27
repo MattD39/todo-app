@@ -15,7 +15,8 @@ import {
 import { flushSync } from "react-dom";
 import type { TaskDTO } from "@/lib/tasks";
 import { isValidDay } from "@/lib/dates";
-import { removeTask, saveTask, type SaveTaskState } from "@/app/task-actions";
+import { addedTaskMessage, type AddScreen } from "@/lib/views";
+import { removeTask, saveTask, type AddedTask, type SaveTaskState } from "@/app/task-actions";
 import { dateTimeFix, fieldLabel, input, segment } from "./form-styles";
 import { StepsEditor } from "./steps-editor";
 import { useBackdropClose } from "./use-backdrop-close";
@@ -41,7 +42,7 @@ const OpenEditor = createContext<(editing: Editing) => void>(() => {});
 type ToastAction = { label: string; onClick: () => void };
 type Toast = { message: string; action?: ToastAction };
 
-const ShowToast = createContext<(message: string, action?: ToastAction) => void>(() => {});
+const ShowToast = createContext<(message: string, action?: ToastAction, ms?: number) => void>(() => {});
 
 export function useToast() {
   return use(ShowToast);
@@ -51,6 +52,8 @@ export function TaskEditorProvider({
   savedCategories,
   defaultCategory,
   today,
+  screen,
+  picked,
   showAddButton = true,
   enterToAdd = false,
   children,
@@ -58,6 +61,8 @@ export function TaskEditorProvider({
   savedCategories: string[]; // the saved list, offered in the Category box
   defaultCategory: string | null; // the filter chip that's on, if any — new tasks start in it
   today: string; // in the user's time zone
+  screen: AddScreen | null; // the screen this is on (null: Chat, which has no Add task)
+  picked: string[]; // the category chips that are on (none = All)
   showAddButton?: boolean; // the floating "Add task" button (off on the Chat tab, where it would cover Send)
   enterToAdd?: boolean; // Enter opens Add task on a computer (Today, Upcoming, Calendar)
   children: React.ReactNode;
@@ -79,12 +84,28 @@ export function TaskEditorProvider({
     clearTimeout(toastTimer.current);
     setCurrentToast(null);
   }, []);
-  const toast = useCallback((message: string, action?: ToastAction) => {
+  const toast = useCallback((message: string, action?: ToastAction, ms?: number) => {
     setCurrentToast({ message, action });
     clearTimeout(toastTimer.current);
     // Longer when there's a button, so there's time to tap it.
-    toastTimer.current = setTimeout(() => setCurrentToast(null), action ? 6000 : 2600);
+    toastTimer.current = setTimeout(() => setCurrentToast(null), ms ?? (action ? 6000 : 2600));
   }, []);
+
+  // A task was just added from the Add task sheet: if it won't show on this
+  // screen (another screen, or hidden by the chips), say where it went.
+  const onAdded = useCallback(
+    (added: AddedTask) => {
+      if (!screen) return;
+      const { message } = addedTaskMessage(added, {
+        screen,
+        today,
+        picked,
+        calendarDay: calendarDay(today) ?? today,
+      });
+      if (message) toast(message, undefined, 2000);
+    },
+    [screen, today, picked, toast],
+  );
 
   return (
     <OpenEditor value={open}>
@@ -101,6 +122,7 @@ export function TaskEditorProvider({
             savedCategories={savedCategories}
             defaultCategory={defaultCategory}
             onClose={close}
+            onAdded={onAdded}
           />
         )}
         {/* aria-live: screen readers announce the message when it appears. */}
@@ -258,11 +280,13 @@ function TaskSheet({
   savedCategories,
   defaultCategory,
   onClose,
+  onAdded,
 }: {
   editing: Editing;
   savedCategories: string[];
   defaultCategory: string | null;
   onClose: () => void;
+  onAdded: (added: AddedTask) => void;
 }) {
   const task = editing.mode === "edit" ? editing.task : null;
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -272,7 +296,10 @@ function TaskSheet({
   const [state, save, saving] = useActionState(
     async (prev: SaveTaskState, formData: FormData) => {
       const result = await saveTask(prev, formData);
-      if (!result.error) onClose();
+      if (!result.error) {
+        onClose();
+        if (result.added) onAdded(result.added);
+      }
       return result;
     },
     { error: null, savedAt: null },
