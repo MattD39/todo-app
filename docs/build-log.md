@@ -767,3 +767,19 @@ Short entries, added as each new step is finished and committed.
     build cache and restarting fixed it. Now I check the stylesheet the
     server actually sends after any style change.
   - **Testing:** the free checks, plus 11 tests in the app.
+
+- **Nov 27 — Date and time boxes, part 1: a click opens the picker.** On a
+  computer, clicking anywhere in the Date or Time box now opens the calendar
+  or clock, not just the little icon. Picking is usually quicker than typing.
+  - **Typing still works:** Tab into the box from the keyboard (that isn't a
+    click, so no picker), or type while the picker is open.
+  - **Why not "only clicks on the numbers type"?** Browsers don't tell the
+    app where the numbers sit inside the box, so it can't tell those clicks
+    apart. Every click opens the picker (Option A, my choice).
+  - **Not for finger taps:** on the iPhone, tapping already opens the date
+    wheel, so a tap is left alone.
+  - **Tricky bit:** the first try asked the browser "is a mouse the main
+    pointer?" to keep it off phones. Chrome on some Windows laptops answers
+    "no" even with a mouse, so nothing happened. Now each click is checked:
+    only a finger tap is skipped.
+  - **Testing:** 9 tests in the app.

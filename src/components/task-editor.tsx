@@ -279,6 +279,34 @@ const REPEAT_OPTIONS = [
   { value: "monthly", label: "Monthly" },
 ] as const;
 
+// On a computer, a click anywhere in the Date or Time box opens its picker
+// (the calendar or clock that the little icon opens), since picking is
+// usually quicker than typing. Browsers don't say where the numbers sit in
+// the box, so this can't leave clicks on the numbers alone: to type a date
+// instead, Tab into the box from the keyboard (no click, so no picker), or
+// just type while the picker is open.
+// Not for a finger tap: on phones and tablets tapping already opens the
+// phone's own picker. Decided per click, from how that press started
+// (onPointerDown), not from what kind of device it is: some Windows laptops
+// with a touch screen say "no mouse" even while you're using one.
+let lastPress = "";
+function notePress(e: React.PointerEvent<HTMLInputElement>) {
+  lastPress = e.pointerType; // "mouse", "pen" or "touch"
+}
+function openPicker(e: React.MouseEvent<HTMLInputElement>) {
+  const press = lastPress;
+  lastPress = "";
+  if (press === "touch") return;
+  const box = e.currentTarget;
+  if (box.disabled || box.readOnly) return;
+  try {
+    box.showPicker();
+  } catch (error) {
+    // An older browser without showPicker, or it refused: the icon still works.
+    console.warn("Couldn't open the date/time picker", error);
+  }
+}
+
 function TaskSheet({
   editing,
   savedCategories,
@@ -479,6 +507,8 @@ function TaskSheet({
                 name="dueDate"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
+                onPointerDown={notePress}
+                onClick={openPicker}
                 className={`${input} ${dateTimeFix}`}
               />
             </label>
@@ -489,6 +519,8 @@ function TaskSheet({
                 name="dueTime"
                 defaultValue={task?.dueTime ?? ""}
                 disabled={!dueDate}
+                onPointerDown={notePress}
+                onClick={openPicker}
                 className={`${input} ${dateTimeFix}`}
               />
             </label>
