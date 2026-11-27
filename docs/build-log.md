@@ -783,3 +783,17 @@ Short entries, added as each new step is finished and committed.
     "no" even with a mouse, so nothing happened. Now each click is checked:
     only a finger tap is skipped.
   - **Testing:** 9 tests in the app.
+
+- **Nov 27 — Date and time boxes, part 2: one Enter saves.** After picking a
+  date or time, a single Enter now saves the task. Before, the first Enter
+  only left the box, so it took two.
+  - **The picker comes first:** while the calendar or clock is open, Enter
+    confirms the pick there. The next Enter saves.
+  - **No half dates:** a date typed only partly (just the year, say) isn't
+    saved as "no date". Chrome flags the box and holds the save until it's
+    finished or cleared.
+  - **No doubles:** pressing Enter again while saving, or holding it down,
+    can't add the task twice. Ctrl+Enter got the same protection.
+  - **Unchanged:** the title box still uses two Enters (the first closes the
+    iPhone keyboard), and Enter in Notes starts a new line.
+  - **Testing:** 9 tests in the app.

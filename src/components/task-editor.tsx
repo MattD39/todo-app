@@ -437,11 +437,20 @@ function TaskSheet({
           // Ctrl/⌘+Enter saves from anywhere on a computer. Boxes that use Enter
           // themselves (Add step, Ask Claude) handle it first and are left alone;
           // Notes is a <textarea>, where Enter starts a new line as usual.
+          // The Date and Time boxes save on the first Enter: there's no keyboard
+          // to close on a computer, and you're usually done once you've picked.
+          // While their picker is open, Enter goes to the picker (it confirms
+          // the pick) and never reaches here, so the next Enter saves.
+          // A half-typed date isn't saved as "no date": the browser flags the
+          // box and holds the save until it's fixed.
           onKeyDown={(e) => {
             if (e.key !== "Enter" || e.nativeEvent.isComposing || e.defaultPrevented) return;
-            if (e.ctrlKey || e.metaKey) {
+            const dateOrTime =
+              e.target instanceof HTMLInputElement && (e.target.type === "date" || e.target.type === "time");
+            if (e.ctrlKey || e.metaKey || dateOrTime) {
               e.preventDefault();
-              e.currentTarget.requestSubmit();
+              // Not while it's already saving or Enter is held down: that would add it twice.
+              if (!saving && !e.repeat) e.currentTarget.requestSubmit();
               return;
             }
             if (e.target instanceof HTMLInputElement) {
