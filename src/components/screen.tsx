@@ -192,6 +192,7 @@ function TabBar({ current, picked }: { current: Tab; picked: string[] }) {
   return (
     <nav
       aria-label="Screens"
+      data-tab-bar=""
       className="fixed inset-x-0 bottom-0 z-[6] grid grid-cols-5 border-t border-line bg-surface pr-[max(8px,env(safe-area-inset-right,0px))] pb-[env(safe-area-inset-bottom,0px)] pl-[max(8px,env(safe-area-inset-left,0px))]"
     >
       {TABS.map(({ tab, label, icon }) => (

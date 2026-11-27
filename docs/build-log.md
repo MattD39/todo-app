@@ -655,3 +655,18 @@ Short entries, added as each new step is finished and committed.
   Before, I had to tap "‹ Settings" and then Close. "‹ Settings" still goes
   back one step.
   - **Testing:** 6 tests in the app.
+
+- **Nov 27 — Chat stays put when the iPhone keyboard opens.** On iPhone,
+  tapping the Chat message box pushed the whole page up. The header
+  vanished, a short chat lost its first messages off the top, an empty chat
+  showed a big blank space, and the tab bar floated above the keyboard with
+  a gap under it.
+  - **Cause → fix:** the Chat page scrolled as one whole page, so the phone
+    shifted all of it up to show the message box. Now Chat is a fixed column:
+    header at the top, messages scrolling in the middle, message box at the
+    bottom. While the keyboard is up, the column shrinks to fit the part of
+    the screen I can still see, so only the messages area gets shorter. The
+    tab bar hides until the keyboard closes.
+  - **Kept:** a long chat still sticks to the newest message, including when
+    the keyboard opens.
+  - **Testing:** 5 tests in the app on the computer; iPhone tests next.

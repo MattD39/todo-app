@@ -53,14 +53,11 @@ export function Chat() {
   const [editingStopped, setEditingStopped] = useState(false); // the box holds a stopped message being edited
   const inputRef = useRef<HTMLInputElement>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const composerRef = useRef<HTMLFormElement>(null);
   // Photo to schedule: the hidden file picker behind the 📷 button, whether a
   // picked photo is being shrunk, and a note about the photo (e.g. "too big").
   const fileRef = useRef<HTMLInputElement>(null);
   const [preparingPhoto, setPreparingPhoto] = useState(false);
   const [photoNote, setPhotoNote] = useState("");
-
-  useKeepAboveKeyboard(composerRef);
 
   // While this screen is showing: no dot on the Chat tab. (Switching tabs
   // hides the screen, and a reply that finishes then puts the dot up.)
@@ -79,10 +76,11 @@ export function Chat() {
   // Follow the newest message: scroll to the bottom as the reply grows, but
   // only while you're at the bottom. Scroll up to read and it leaves you be;
   // scroll back down (or send a message) and it follows again.
-  const followRef = useFollowBottom();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const followRef = useFollowBottom(scrollRef);
   const lastMessage = messages.at(-1);
   useEffect(() => {
-    if (followRef.current) scrollToBottom();
+    if (followRef.current) scrollToBottom(scrollRef.current);
   }, [followRef, messages.length, lastMessage, error]);
 
   // The message to offer Try again / Edit for: its reply was stopped, or it wasn't sent.
@@ -167,131 +165,134 @@ export function Chat() {
 
   return (
     <>
-      {messages.length === 0 ? (
-        <div className="mt-4 flex flex-col gap-3">
-          <p className="text-muted">
-            Ask Claude about your tasks: what&apos;s due, what to do first, or
-            how your week went. Claude can also add tasks, change them or tick
-            them off for you. Tap the camera to send a photo of your work
-            schedule, and Claude will add your shifts.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {STARTERS.map((starter) => (
-              <button
-                key={starter}
-                type="button"
-                onClick={() => send(starter)}
-                className="rounded-full border border-line bg-surface px-3.5 py-2 text-[0.92rem] text-ink"
-              >
-                {starter}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="mt-2 flex flex-col gap-2.5" aria-live="polite">
-          {messages.map((m, i) => {
-            const thinking =
-              m.role === "assistant" &&
-              !m.text &&
-              sending &&
-              i === messages.length - 1;
-            return (
-              <Fragment key={i}>
-                <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 whitespace-pre-wrap ${
-                    m.role === "user"
-                      ? "self-end rounded-br-md bg-accent text-accent-ink"
-                      : "self-start rounded-bl-md border border-line bg-surface text-ink"
-                  }`}
+      {/* Only this part scrolls: the header above and the message bar below stay put. */}
+      <div
+        ref={scrollRef}
+        className="-mx-4 min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-3"
+      >
+        {messages.length === 0 ? (
+          <div className="mt-4 flex flex-col gap-3">
+            <p className="text-muted">
+              Ask Claude about your tasks: what&apos;s due, what to do first, or
+              how your week went. Claude can also add tasks, change them or tick
+              them off for you. Tap the camera to send a photo of your work
+              schedule, and Claude will add your shifts.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {STARTERS.map((starter) => (
+                <button
+                  key={starter}
+                  type="button"
+                  onClick={() => send(starter)}
+                  className="rounded-full border border-line bg-surface px-3.5 py-2 text-[0.92rem] text-ink"
                 >
-                  {m.hadPhoto && (
-                    <span className="block text-[0.85rem] font-bold opacity-85">
-                      📷 Photo
-                    </span>
-                  )}
-                  {thinking ? (
-                    <span className="text-muted">
-                      {messages[i - 1]?.hadPhoto
-                        ? "Claude is reading your photo…"
-                        : "Claude is thinking…"}
-                    </span>
-                  ) : (
-                    m.text
-                  )}
-                  {m.stopped && (
-                    <span className="text-muted">
-                      {m.text
-                        ? " (stopped, nothing was changed)"
-                        : "Stopped. Nothing was changed."}
-                    </span>
-                  )}
-                  {m.changes && (
-                    <ChangesNote
-                      message={m}
-                      busy={sending || undoing}
-                      onUndo={(which) => undo(i, which)}
-                    />
-                  )}
-                </div>
-                {/* Your message wasn't sent: why (with Sign in when signed out). */}
-                {m.failed && (
-                  <div className="-mt-1 max-w-[85%] self-end text-right">
-                    <ProblemNote problem={m.failed} prefix="Not sent." />
-                  </div>
-                )}
-              </Fragment>
-            );
-          })}
-
-          {/* Under the stopped reply or unsent message, well away from the Stop
-              button (which sits in the bar at the bottom and covers the page
-              there). The message only goes back in the box when you choose Edit. */}
-          {stoppedMessage !== null && !sending && (
-            <div
-              className={`flex gap-2 ${messages.at(-1)?.role === "user" ? "self-end" : "self-start"}`}
-            >
-              <button
-                type="button"
-                disabled={!retryReady}
-                onClick={() => retry(stoppedMessage)}
-                className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
-              >
-                Try again
-              </button>
-              <button
-                type="button"
-                disabled={!retryReady}
-                onClick={() => edit(stoppedMessage)}
-                className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
-              >
-                Edit
-              </button>
+                  {starter}
+                </button>
+              ))}
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-col gap-2.5" aria-live="polite">
+            {messages.map((m, i) => {
+              const thinking =
+                m.role === "assistant" &&
+                !m.text &&
+                sending &&
+                i === messages.length - 1;
+              return (
+                <Fragment key={i}>
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 whitespace-pre-wrap ${
+                      m.role === "user"
+                        ? "self-end rounded-br-md bg-accent text-accent-ink"
+                        : "self-start rounded-bl-md border border-line bg-surface text-ink"
+                    }`}
+                  >
+                    {m.hadPhoto && (
+                      <span className="block text-[0.85rem] font-bold opacity-85">
+                        📷 Photo
+                      </span>
+                    )}
+                    {thinking ? (
+                      <span className="text-muted">
+                        {messages[i - 1]?.hadPhoto
+                          ? "Claude is reading your photo…"
+                          : "Claude is thinking…"}
+                      </span>
+                    ) : (
+                      m.text
+                    )}
+                    {m.stopped && (
+                      <span className="text-muted">
+                        {m.text
+                          ? " (stopped, nothing was changed)"
+                          : "Stopped. Nothing was changed."}
+                      </span>
+                    )}
+                    {m.changes && (
+                      <ChangesNote
+                        message={m}
+                        busy={sending || undoing}
+                        onUndo={(which) => undo(i, which)}
+                      />
+                    )}
+                  </div>
+                  {/* Your message wasn't sent: why (with Sign in when signed out). */}
+                  {m.failed && (
+                    <div className="-mt-1 max-w-[85%] self-end text-right">
+                      <ProblemNote problem={m.failed} prefix="Not sent." />
+                    </div>
+                  )}
+                </Fragment>
+              );
+            })}
 
-      {leftNote && <p className="mt-3 text-[0.85rem] text-muted">{leftNote}</p>}
+            {/* Under the stopped reply or unsent message, well away from the Stop
+                button (which sits in the bar at the bottom). The message only
+                goes back in the box when you choose Edit. */}
+            {stoppedMessage !== null && !sending && (
+              <div
+                className={`flex gap-2 ${messages.at(-1)?.role === "user" ? "self-end" : "self-start"}`}
+              >
+                <button
+                  type="button"
+                  disabled={!retryReady}
+                  onClick={() => retry(stoppedMessage)}
+                  className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
+                >
+                  Try again
+                </button>
+                <button
+                  type="button"
+                  disabled={!retryReady}
+                  onClick={() => edit(stoppedMessage)}
+                  className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[0.9rem] font-bold text-ink disabled:opacity-50"
+                >
+                  Edit
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
-      {error && (
-        <div className="mt-3">
-          <ProblemNote problem={error} onSignedIn={clearChatError} />
-        </div>
-      )}
+        {leftNote && <p className="mt-3 text-[0.85rem] text-muted">{leftNote}</p>}
 
-      {/* Room for the photo strip above the message bar, so it never covers
-          the newest message. */}
-      {(attached || preparingPhoto || photoNote) && <div aria-hidden className="h-20" />}
+        {error && (
+          <div className="mt-3">
+            <ProblemNote problem={error} onSignedIn={clearChatError} />
+          </div>
+        )}
 
-      {/* Sits just above the tab bar (or above the keyboard while typing). */}
+      </div>
+
+      {/* At the bottom of the column: above the tab bar, or right on top of
+          the keyboard while typing. */}
       <form
-        ref={composerRef}
         onSubmit={(e) => {
           e.preventDefault();
           send(draft, { replaceStopped: editingStopped });
         }}
-        className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] z-[6] border-t border-line bg-bg"
+        className="-mx-4 flex-none border-t border-line bg-bg"
       >
         {/* The photo going with your next message (or a note about it). */}
         {(attached || preparingPhoto || photoNote) && (
@@ -523,58 +524,39 @@ function ChangesNote({
   );
 }
 
-// The very bottom of the page. The page has room at the bottom for the
-// message bar and tab bar, so the newest message ends up just above them
-// (not hidden behind them).
-function scrollToBottom() {
-  window.scrollTo({ top: document.documentElement.scrollHeight });
+// The very bottom of the messages. (Only the messages scroll; the header and
+// the message bar stay put.)
+function scrollToBottom(el: HTMLElement | null) {
+  if (el) el.scrollTop = el.scrollHeight;
 }
 
 // Whether the chat should follow new text. Becomes false when you scroll up,
 // true again when you're back near the bottom. (A reply growing doesn't move
-// the page, so only real scrolling changes it.)
-function useFollowBottom() {
+// the messages, so only real scrolling changes it.) When the messages area
+// gets shorter (the iPhone keyboard coming up) while following, it stays at
+// the bottom, so the newest message isn't hidden.
+function useFollowBottom(ref: React.RefObject<HTMLElement | null>) {
   const follow = useRef(true);
   useEffect(() => {
-    let lastY = window.scrollY;
+    const el = ref.current;
+    if (!el) return;
+    let lastY = el.scrollTop;
     const onScroll = () => {
-      const y = window.scrollY;
-      const nearBottom =
-        window.innerHeight + y >= document.documentElement.scrollHeight - 80;
+      const y = el.scrollTop;
+      const nearBottom = el.clientHeight + y >= el.scrollHeight - 80;
       if (nearBottom) follow.current = true;
       else if (y < lastY) follow.current = false; // you scrolled up
       lastY = y;
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-  return follow;
-}
-
-// On iPhone the keyboard slides over the bottom of the page without making it
-// smaller, which would hide the message box. While the keyboard is up, this
-// moves the box to sit right on top of it; when it goes away, the box goes
-// back above the tab bar.
-function useKeepAboveKeyboard(ref: React.RefObject<HTMLElement | null>) {
-  useEffect(() => {
-    const view = window.visualViewport;
-    const el = ref.current;
-    if (!view || !el) return;
-
-    const place = () => {
-      const covered = window.innerHeight - view.height - view.offsetTop;
-      // Over 100px hidden means a keyboard (not just a toolbar); ignore pinch-zoom.
-      el.style.bottom =
-        covered > 100 && Math.abs(view.scale - 1) < 0.01 ? `${covered}px` : "";
-    };
-
-    place();
-    view.addEventListener("resize", place);
-    view.addEventListener("scroll", place);
+    const resized = new ResizeObserver(() => {
+      if (follow.current) scrollToBottom(el);
+    });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    resized.observe(el);
     return () => {
-      view.removeEventListener("resize", place);
-      view.removeEventListener("scroll", place);
-      el.style.bottom = "";
+      el.removeEventListener("scroll", onScroll);
+      resized.disconnect();
     };
   }, [ref]);
+  return follow;
 }

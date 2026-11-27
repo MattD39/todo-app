@@ -146,3 +146,15 @@ body:has(dialog[open]) {
     opacity: 1;
   }
 }
+
+/* The Chat screen (chat-frame.tsx) leaves room at the bottom for the tab bar.
+   While the iPhone keyboard is up, the tab bar is hidden and that room goes. */
+.chat-frame {
+  padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+}
+html[data-keyboard="open"] .chat-frame {
+  padding-bottom: 0;
+}
+html[data-keyboard="open"] [data-tab-bar] {
+  display: none;
+}
