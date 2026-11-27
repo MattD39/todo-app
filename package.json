@@ -20,6 +20,7 @@
     "make:schedule-photos": "node scripts/make-schedule-photos.mts",
     "check:batch-delete": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-batch-delete.mts",
     "check:categories": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-categories.mts",
+    "check:order": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-order.mts",
     "check:saved-categories": "node --env-file=.env.local --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-saved-categories.mts"
   },
   "dependencies": {

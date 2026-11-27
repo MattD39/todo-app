@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { formatMonth, monthGrid, relDay, type Now } from "@/lib/dates";
 import type { HistoryDTO, TaskDTO, TickDTO } from "@/lib/tasks";
-import { dayHistory, setCategoryParams, type DayMark } from "@/lib/views";
+import { dayHistory, setCategoryParams, sortTasks, type DayMark } from "@/lib/views";
 import { TaskGroup } from "./task-list";
 import { Status } from "./status";
 
@@ -44,9 +44,13 @@ export function MonthCalendar({
   const { today } = now;
   const month = initialDay.slice(0, 7);
   const days = monthGrid(initialDay);
-  const dayTasks = open.filter((t) => t.dueDate === selected);
+  const dayTasks = sortTasks(open.filter((t) => t.dueDate === selected));
   const repeatIds = repeats[selected] ?? [];
-  const dayRepeats = open.filter((t) => repeatIds.includes(t.id));
+  // Sorted as if due on this day (their own date is an earlier one).
+  const dayRepeats = sortTasks(
+    open.filter((t) => repeatIds.includes(t.id)),
+    selected,
+  );
   const { finished, movedOn } = dayHistory(history, selected, timeZone);
   const isEmpty = !dayTasks.length && !dayRepeats.length && !finished.length && !movedOn.length;
 

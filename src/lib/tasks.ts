@@ -39,6 +39,7 @@ export type TaskDTO = {
   repeat: Repeat | null;
   done: boolean;
   doneAt: string | null; // ISO timestamp
+  createdAt: string; // ISO timestamp: when it was added (the list order uses it)
   category: CategoryDTO | null;
   steps: StepDTO[]; // in order
   // Set only on the "Finished today" entry for one tick of a repeating task.
@@ -1319,6 +1320,7 @@ function toDTO(row: TaskRow): TaskDTO {
     repeat: row.repeat,
     done: row.done,
     doneAt: row.doneAt ? row.doneAt.toISOString() : null,
+    createdAt: row.createdAt.toISOString(),
     category: row.category ? { id: row.category.id, name: row.category.name } : null,
     steps: row.subtasks,
     completionId: null,

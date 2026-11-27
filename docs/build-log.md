@@ -696,3 +696,24 @@ Short entries, added as each new step is finished and committed.
     scroll bar) can switch following off.
   - **Kept:** scrolling up while a reply is coming in still stops it
     following, as before.
+
+- **Nov 27 — New list order, part 1: the sorting rule.** Lists used to sort
+  by date, then priority, then plain A–Z, which put "10" before "2". Now
+  every list (Today's sections, each Upcoming day, a Calendar day, and the
+  category-filtered views) uses one shared rule:
+  1. priority, high first;
+  2. due date, soonest first (most overdue first); on the same day, tasks
+     with a time first, in time order;
+  3. oldest added first (this orders the Anytime tasks);
+  4. added at the same moment: A–Z with numbers read as numbers, so "Shift 2"
+     comes before "Shift 10".
+  - **Tricky bit:** Upcoming built its day groups in the order tasks
+    arrived, so sorting by priority first would have jumbled the days. The
+    days are now sorted by date on purpose.
+  - **Repeating tasks:** their current due date counts. A weekly task shown
+    ahead on the Calendar sorts as if due that day.
+  - **Decision (mine): screens only.** What Claude reads (Chat and the
+    connector) stays soonest-first, and Done stays newest-first.
+  - **Testing:** a new free check (18 cases, passed 3 times; breaking the
+    rule on purpose made 6 fail, so it really checks), the other free
+    checks, and 9 tests in the app.

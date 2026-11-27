@@ -54,6 +54,7 @@ function task(id: string, title: string, extra: Partial<TaskDTO> = {}): TaskDTO 
     repeat: null,
     done: false,
     doneAt: null,
+    createdAt: "2026-11-01T00:00:00.000Z",
     category: null,
     steps: [],
     completionId: null,

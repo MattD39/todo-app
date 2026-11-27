@@ -11,7 +11,7 @@ export type TodayView = {
   finishedToday: TaskDTO[];
 };
 
-// open: unfinished tasks, already in display order (soonest first).
+// open: unfinished tasks, in any order (each section is sorted here).
 // recentlyDone: tasks finished in roughly the last day and a half.
 export function buildToday(open: TaskDTO[], recentlyDone: TaskDTO[], now: Now, timeZone: string): TodayView {
   const overdue: TaskDTO[] = [];
@@ -24,10 +24,11 @@ export function buildToday(open: TaskDTO[], recentlyDone: TaskDTO[], now: Now, t
     // Anything else is due later — it belongs on the Upcoming screen.
   }
   const finishedToday = recentlyDone.filter((t) => t.doneAt && dayOf(t.doneAt, timeZone) === now.today);
-  return { overdue, dueToday, anytime, finishedToday };
+  return { overdue: sortTasks(overdue), dueToday: sortTasks(dueToday), anytime: sortTasks(anytime), finishedToday };
 }
 
-// Tasks due after today, one group per day, soonest first.
+// Tasks due after today, one group per day, soonest day first; each day's
+// tasks in list order (sortTasks).
 export function buildUpcoming(open: TaskDTO[], now: Now): { day: string; tasks: TaskDTO[] }[] {
   const byDay = new Map<string, TaskDTO[]>();
   for (const task of open) {
@@ -36,7 +37,9 @@ export function buildUpcoming(open: TaskDTO[], now: Now): { day: string; tasks: 
     list.push(task);
     byDay.set(task.dueDate, list);
   }
-  return [...byDay].map(([day, tasks]) => ({ day, tasks }));
+  return [...byDay]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([day, tasks]) => ({ day, tasks: sortTasks(tasks) }));
 }
 
 // The summary line under each screen's title. Always counts every task,
@@ -49,6 +52,55 @@ export function buildStats(open: TaskDTO[], now: Now): Stats {
     overdue: open.filter((t) => isOverdue(t, now)).length,
     open: open.length,
   };
+}
+
+// ─── List order ──────────────────────────────────────────────────────────────
+
+// The order tasks show in a list (Today's sections, each Upcoming day, a
+// Calendar day). Not used for Done, or for what Claude reads.
+//   1. Priority: high, medium, low (anything else after low).
+//   2. Due date, soonest first (so the most overdue come first). On the same
+//      day, tasks with a time first, in time order, then tasks with no time.
+//      No date at all goes last.
+//   3. Oldest added first.
+//   4. Added at the same moment: A to Z, reading numbers as numbers ("Shift 2"
+//      before "Shift 10") and ignoring capitals.
+// `onDay`: treat every task as due that day (a Calendar day's "Repeats here",
+// where each task's own date is an earlier one).
+export function compareTasks(a: TaskDTO, b: TaskDTO, onDay?: string): number {
+  return (
+    priorityRank(a.priority) - priorityRank(b.priority) ||
+    compareDue(onDay ?? a.dueDate, a.dueTime, onDay ?? b.dueDate, b.dueTime) ||
+    compareText(a.createdAt, b.createdAt) ||
+    TITLES.compare(a.title, b.title) ||
+    compareText(a.id, b.id) // never equal: the same order every time
+  );
+}
+
+// A sorted copy (the list passed in isn't changed).
+export function sortTasks<T extends TaskDTO>(tasks: T[], onDay?: string): T[] {
+  return [...tasks].sort((a, b) => compareTasks(a, b, onDay));
+}
+
+const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const priorityRank = (priority: string | null | undefined) => PRIORITY_RANK[priority ?? ""] ?? 3;
+
+// A fixed language, so the server and the browser always agree.
+const TITLES = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+// Plain character order: right for "YYYY-MM-DD", "HH:MM" and ISO timestamps.
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function compareDue(aDate: string | null, aTime: string | null, bDate: string | null, bTime: string | null): number {
+  if (aDate !== bDate) {
+    if (!aDate) return 1;
+    if (!bDate) return -1;
+    return compareText(aDate, bDate);
+  }
+  if (aTime === bTime) return 0;
+  if (!aTime) return 1;
+  if (!bTime) return -1;
+  return compareText(aTime, bTime);
 }
 
 // ─── Category chips (several can be on at once) ─────────────────────────────
